@@ -1,0 +1,19 @@
+{
+  "name": "mychart-cli",
+  "version": "0.1.0",
+  "description": "Local-first CLI for exporting patient-owned MyChart records through a Chrome/Puppeteer harness.",
+  "license": "MIT",
+  "scripts": {
+    "mychart": "node src/cli.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "init:live": "node scripts/init-live-harness.mjs",
+    "init:live:headless": "node scripts/init-live-headless.mjs",
+    "launch:live": "node scripts/launch-live-harness.mjs",
+    "check:live": "node scripts/check-live-harness.mjs",
+    "validate:live": "node scripts/validate-live-harness.mjs",
+    "export:recent": "node scripts/export-recent-records.mjs"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^24.43.0"
+  }
+}
