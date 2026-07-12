@@ -6,6 +6,13 @@ import puppeteer from 'puppeteer-core';
 
 import { collectPriorityDetailLinks } from '../core/deep-sync-links.js';
 import {
+  canonicalClinicalRouteIdentity,
+  classifySyncLink,
+  hashCanonicalIdentity,
+  normalizeSyncCategories,
+} from '../core/sync-route-classifier.js';
+import { assertActivePatientContext, bindPatientContext } from './patient-context.js';
+import {
   DEFAULT_LIVE_PROFILE_DIR,
   DEFAULT_STORE_PATH,
   DEFAULT_TIMEOUT_SECONDS,
@@ -67,7 +74,7 @@ export async function activateAuthenticatedMyChartTab(browser, {
     page.setDefaultTimeout(timeoutSeconds * 1000);
     await page.goto(session.mychartUrl, { waitUntil: 'domcontentloaded' });
     await page.bringToFront();
-    return { status: 'opened', url: page.url() };
+    return { status: 'opened', url: page.url(), page };
   }
 
   const inspected = [];
@@ -93,6 +100,7 @@ export async function activateAuthenticatedMyChartTab(browser, {
   return {
     status: authenticated.state.loggedIn ? 'activated_authenticated' : 'activated_mychart',
     url: authenticated.page.url(),
+    page: authenticated.page,
     candidates: inspected.map((item) => ({
       url: item.page.url(),
       loggedIn: Boolean(item.state.loggedIn),
@@ -472,40 +480,85 @@ function normalizeEnqueuedUrl(href = '', category = '') {
   return href;
 }
 
+export function selectExtractionLinks({
+  extraction,
+  target,
+  expectedOrigin = '',
+  patientContextToken = '',
+} = {}) {
+  const category = target.category || extraction.page?.category || '';
+  const byUrl = new Map();
+  for (const href of collectPriorityDetailLinks(extraction, { ...target, category })) {
+    byUrl.set(href, { text: category === 'visits' ? 'Visit note' : 'Result detail', href });
+  }
+  for (const link of extraction.links || []) if (link.href && !byUrl.has(link.href)) byUrl.set(link.href, link);
+  return [...byUrl.values()].map((link) => {
+    const url = normalizeEnqueuedUrl(link.href, category);
+    const classification = classifySyncLink({ ...link, href: url }, {
+      category,
+      sourceUrl: extraction.page?.sourceUrl,
+      expectedOrigin,
+    });
+    const identity = canonicalClinicalRouteIdentity(url, { category, patientContextToken });
+    return { ...link, url, category, classification, identity, identityHash: hashCanonicalIdentity(identity) };
+  });
+}
+
 function enqueueExtractionLinks({
   queue,
+  exhaustiveCandidates,
   seen,
   extraction,
   target,
   priorityDetailCoverage = new Set(),
+  canonicalCoverage = {},
+  expectedOrigin = '',
+  patientContextToken = '',
+  exhaustive = false,
+  routeCounts = {},
 }) {
-  const category = target.category || extraction.page?.category || '';
-  const priorityLinks = collectPriorityDetailLinks(extraction, { ...target, category })
-    .map((href) => ({
-      text: category === 'visits' ? 'Visit note' : 'Result detail',
-      href,
-      priorityDetail: true,
-    }));
-  const links = [...priorityLinks, ...(extraction.links || [])];
-  for (const link of links) {
-    if (!link.href || isSelfHashLink(link.href, extraction.page?.sourceUrl)) continue;
-    if (!link.priorityDetail && !shouldEnqueueLink(link, { ...target, category })) continue;
-    const url = normalizeEnqueuedUrl(link.href, category);
-    const key = normalizeUrlKey(url);
+  const selected = selectExtractionLinks({ extraction, target, expectedOrigin, patientContextToken });
+  let admissibleCount = 0;
+  for (const link of selected) {
+    const { classification } = link;
+    routeCounts[classification.routeClass] = (routeCounts[classification.routeClass] || 0) + 1;
+    if (!link.url || isSelfHashLink(link.url, extraction.page?.sourceUrl)) continue;
+    // Once an exact context is asserted, crawler-discovered proxy switches could
+    // invalidate the binding. Switching remains available explicitly before
+    // validation through --switch-patient.
+    if (patientContextToken && classification.routeClass === 'proxy-switch') continue;
+    if (classification.admission === 'rejected') continue;
+    admissibleCount += 1;
+    const key = link.identityHash || normalizeUrlKey(link.url);
     if (seen.has(key)) continue;
     seen.add(key);
-    const coverageKey = link.priorityDetail
-      ? getPriorityDetailCoverageKey(url, category)
-      : '';
-    queue.push({
-      category,
-      label: link.text || target.label || target.category,
-      url,
-      priorityDetail: Boolean(link.priorityDetail),
-      hasStoredRecord: coverageKey ? priorityDetailCoverage.has(coverageKey) : false,
+    const legacyCoverageKey = getPriorityDetailCoverageKey(link.url, link.category);
+    // Patient-scoped canonical coverage is authoritative once a context token is
+    // available. Legacy URL coverage is intentionally rebuilt because it cannot
+    // prove which proxy context produced the stored record.
+    const hasStoredRecord = Boolean(canonicalCoverage[key])
+      || (!patientContextToken && legacyCoverageKey ? priorityDetailCoverage.has(legacyCoverageKey) : false);
+    const queued = {
+      category: link.category,
+      label: `${link.category} ${classification.routeClass}`,
+      url: link.url,
+      canonicalKey: key,
+      routeClass: classification.routeClass,
+      priorityDetail: classification.admission === 'strict',
+      broadCandidate: classification.admission === 'exhaustive',
+      hasStoredRecord,
       priority: target.priority || 10,
-    });
+    };
+    if (classification.admission === 'strict' || exhaustive) queue.push(queued);
+    else exhaustiveCandidates.push(queued);
   }
+  return { admissibleCount };
+}
+
+export function classifyDiscoveryEvidence(extraction = {}, { admissibleCount = 0 } = {}) {
+  if (admissibleCount > 0 || (extraction.records || []).length > 0) return 'classified';
+  if (extraction.page?.debug?.explicitEmptyState) return 'explicit-empty';
+  return 'malformed';
 }
 
 function markIncrementalRefreshTargets(targets = []) {
@@ -531,6 +584,8 @@ function inferSyncCategoryFromUrl(url = '') {
 function createSeedSyncTargets(seedUrls = [], {
   categories,
   priorityDetailCoverage = new Set(),
+  canonicalCoverage = {},
+  patientContextToken = '',
 } = {}) {
   const categorySet = new Set((categories || []).map((item) => String(item || '').trim()).filter(Boolean));
   return [...new Set((seedUrls || []).map((item) => String(item || '').trim()).filter(Boolean))]
@@ -538,13 +593,17 @@ function createSeedSyncTargets(seedUrls = [], {
       const category = inferSyncCategoryFromUrl(url);
       if (categorySet.size && !categorySet.has(category)) return null;
       const coverageKey = getPriorityDetailCoverageKey(url, category);
+      const canonicalKey = hashCanonicalIdentity(canonicalClinicalRouteIdentity(url, { category, patientContextToken }));
       return {
         category,
         label: `Seed URL: ${category}`,
         url,
+        canonicalKey,
+        routeClass: coverageKey ? (category === 'visits' ? 'visit-detail' : 'result-detail') : 'discovery',
         priority: 0,
         priorityDetail: Boolean(coverageKey),
-        hasStoredRecord: coverageKey ? priorityDetailCoverage.has(coverageKey) : false,
+        hasStoredRecord: Boolean(canonicalCoverage[canonicalKey])
+          || (!patientContextToken && coverageKey ? priorityDetailCoverage.has(coverageKey) : false),
       };
     })
     .filter(Boolean);
@@ -555,9 +614,10 @@ export function shouldVisitSyncTarget(target = {}, {
   visitedUrls = {},
 } = {}) {
   if (force) return true;
+  if ((target.priorityDetail || target.broadCandidate) && target.hasStoredRecord) return false;
   const key = normalizeUrlKey(target.url);
   if (!visitedUrls[key]) return true;
-  if (target.priorityDetail && !target.hasStoredRecord) return true;
+  if (target.priorityDetail || target.broadCandidate) return true;
   return Boolean(target.refreshOnIncremental);
 }
 
@@ -580,29 +640,77 @@ export async function runPuppeteerDeepSync({
   seedUrls,
   maxRecords,
   maxPages,
+  maxBroadPages = 25,
   storePath = DEFAULT_STORE_PATH,
+  profileDir = DEFAULT_LIVE_PROFILE_DIR,
+  requireActivePatient = '',
+  exhaustive = false,
   force = false,
   timeoutSeconds = DEFAULT_TIMEOUT_SECONDS,
   onProgress = () => {},
 } = {}) {
   if (!browser) throw new Error('browser is required.');
-  await activateAuthenticatedMyChartTab(browser, { session, timeoutSeconds });
-  const mychartPage = await findMyChartPage(browser, session);
-  const discoveryTargets = await getDeepSyncTargetsFromPage(mychartPage, { categories });
+  const normalizedCategories = normalizeSyncCategories(categories || []);
+  const activation = await activateAuthenticatedMyChartTab(browser, { session, timeoutSeconds });
+  const mychartPage = activation.page || await findMyChartPage(browser, session);
+  const expectedOrigin = new URL(mychartPage.url()).origin;
+  let patientContext = { status: requireActivePatient ? 'missing' : 'not_required', normalizedLabel: '' };
+  let patientContextToken = '';
+  if (requireActivePatient) {
+    patientContext = await assertActivePatientContext(mychartPage, requireActivePatient);
+    const binding = await bindPatientContext({
+      profileDir,
+      origin: expectedOrigin,
+      normalizedLabel: patientContext.normalizedLabel,
+      validated: true,
+    });
+    patientContextToken = binding.token;
+  }
+  const discoveredTargets = await getDeepSyncTargetsFromPage(mychartPage, { categories: normalizedCategories });
+  const discoveryTargets = patientContextToken
+    ? discoveredTargets.filter((target) => classifySyncLink({ href: target.url }, {
+        category: target.category,
+        expectedOrigin,
+      }).routeClass !== 'proxy-switch')
+    : discoveredTargets;
+  const discoveredCategories = new Set(discoveryTargets.map((target) => target.category));
+  const missingDiscoveryCategories = normalizedCategories.filter((category) => !discoveredCategories.has(category));
   const store = new JsonMedicalStore({ storePath });
-  const metadata = await store.getSyncMetadata();
-  const priorityDetailCoverage = buildPriorityDetailCoverage(await store.getAllRecords());
+  const writeSession = await store.openWriteSession();
+  const metadata = writeSession.syncMetadata;
+  const priorityDetailCoverage = buildPriorityDetailCoverage(writeSession.records);
+  const canonicalCoverage = force ? {} : { ...(metadata.canonicalCoverage || {}) };
   const visitedUrls = force ? {} : { ...(metadata.visitedUrls || {}) };
   const seen = new Set();
-  const seedTargets = createSeedSyncTargets(seedUrls, { categories, priorityDetailCoverage });
-  const queue = [
-    ...seedTargets,
-    ...markIncrementalRefreshTargets(discoveryTargets),
-  ]
-    .sort((a, b) => (a.priority || 10) - (b.priority || 10));
-  queue.forEach((target) => seen.add(normalizeUrlKey(target.url)));
-  const worker = await browser.newPage();
+  const seedTargets = createSeedSyncTargets(seedUrls, {
+    categories: normalizedCategories,
+    priorityDetailCoverage,
+    canonicalCoverage,
+    patientContextToken,
+  });
+  const initialTargets = [...seedTargets, ...markIncrementalRefreshTargets(discoveryTargets).map((target) => ({
+    ...target,
+    routeClass: target.category === 'proxy' ? 'proxy-switch' : 'discovery',
+    canonicalKey: hashCanonicalIdentity(canonicalClinicalRouteIdentity(target.url, {
+      category: target.category,
+      patientContextToken,
+    })),
+  }))].sort((a, b) => (a.priority || 10) - (b.priority || 10));
+  const queue = [];
+  for (const target of initialTargets) {
+    const key = target.canonicalKey || normalizeUrlKey(target.url);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    queue.push(target);
+  }
+  const exhaustiveCandidates = [];
+  const unresolvedSuspicionCategories = new Set(missingDiscoveryCategories);
+  // Crawl in the exact SCH-origin tab whose active context was validated. A new
+  // tab would share cookies but would not preserve the validated tab binding.
+  const worker = mychartPage;
   worker.setDefaultTimeout(timeoutSeconds * 1000);
+  const scopeKey = hashCanonicalIdentity(`${expectedOrigin}|${patientContextToken}|${normalizedCategories.join(',')}`);
+  const runId = `${Date.now()}-${process.pid}`;
   const status = {
     success: true,
     running: true,
@@ -610,54 +718,197 @@ export async function runPuppeteerDeepSync({
     current: 'starting',
     pagesPlanned: queue.length,
     pagesVisited: 0,
+    broadPagesAttempted: 0,
+    broadPagesVisited: 0,
     recordsSaved: 0,
+    recordDeltas: { inserted: 0, updated: 0, unchanged: 0, deleted: 0 },
     errors: [],
+    errorStages: {},
+    routeCounts: {},
+    stageTimingsMs: { navigation: 0, extraction: 0, storage: 0 },
+    // routeCounts classifies links discovered on pages. navigatedRouteCounts is
+    // separate so rejected candidates can never be mistaken for page visits.
+    navigatedRouteCounts: {},
+    requestedMode: exhaustive ? 'exhaustive' : 'strict',
+    effectiveMode: exhaustive || missingDiscoveryCategories.length ? 'exhaustive' : 'strict',
+    fallbackReason: missingDiscoveryCategories.length ? 'malformed_or_missing_discovery' : '',
+    completionReason: '',
+    truncated: false,
+    freshnessSafe: false,
+    activePatientContext: patientContext.status,
+    requestedCategories: normalizedCategories,
+    categoryCompletion: Object.fromEntries(normalizedCategories.map((category) => [
+      category,
+      missingDiscoveryCategories.includes(category) ? 'malformed' : 'pending',
+    ])),
     startedAt: new Date().toISOString(),
   };
+  let abortRequested = false;
+  const requestAbort = () => { abortRequested = true; };
+  process.once('SIGINT', requestAbort);
+  process.once('SIGTERM', requestAbort);
+  const persistRun = async ({ forceCheckpoint = false, checkpointIfDue = false } = {}) => {
+    writeSession.setSyncMetadata({
+      ...metadata,
+      visitedUrls,
+      canonicalCoverage,
+      syncRuns: {
+        ...(metadata.syncRuns || {}),
+        [scopeKey]: {
+          runId,
+          startedAt: status.startedAt,
+          finishedAt: status.finishedAt || '',
+          inProgress: status.running,
+          requestedCategories: normalizedCategories,
+          requestedMode: status.requestedMode,
+          effectiveMode: status.effectiveMode,
+          fallbackReason: status.fallbackReason,
+          completionReason: status.completionReason,
+          truncated: status.truncated,
+          freshnessSafe: status.freshnessSafe,
+          activePatientContext: status.activePatientContext,
+          categoryCompletion: status.categoryCompletion,
+          errorCount: status.errors.length,
+          unresolvedSuspicionCount: exhaustiveCandidates.length + unresolvedSuspicionCategories.size,
+          routeCounts: status.routeCounts,
+          navigatedRouteCounts: status.navigatedRouteCounts,
+          recordDeltas: status.recordDeltas,
+          broadPagesAttempted: status.broadPagesAttempted,
+          broadPagesVisited: status.broadPagesVisited,
+        },
+      },
+    });
+    if (forceCheckpoint) await writeSession.checkpoint({ force: true });
+    else if (checkpointIfDue) await writeSession.checkpointIfDue();
+  };
+  await persistRun({ forceCheckpoint: true });
 
+  const addTiming = (stage, started) => {
+    status.stageTimingsMs[stage] += Math.max(0, Date.now() - started);
+  };
   try {
-    while (queue.length) {
-      if (Number.isFinite(Number(maxPages)) && status.pagesVisited >= Number(maxPages)) break;
-      if (Number.isFinite(Number(maxRecords)) && status.recordsSaved >= Number(maxRecords)) break;
+    while (queue.length || exhaustiveCandidates.length) {
+      if (abortRequested) {
+        status.completionReason = 'aborted'; status.truncated = true; break;
+      }
+      if (!queue.length && exhaustiveCandidates.length) {
+        status.effectiveMode = 'exhaustive';
+        status.fallbackReason ||= 'credible_unrecognized_clinical_route';
+        queue.push(...exhaustiveCandidates.splice(0));
+      }
+      if (Number.isFinite(Number(maxPages)) && status.pagesVisited >= Number(maxPages)) {
+        status.completionReason = 'max_pages'; status.truncated = true; break;
+      }
+      if (Number.isFinite(Number(maxRecords)) && status.recordsSaved >= Number(maxRecords)) {
+        status.completionReason = 'max_records'; status.truncated = true; break;
+      }
       const target = queue.shift();
-      const key = normalizeUrlKey(target.url);
+      if (target.broadCandidate && status.broadPagesAttempted >= Number(maxBroadPages)) {
+        status.completionReason = 'max_broad_pages'; status.truncated = true; break;
+      }
+      const key = target.canonicalKey || normalizeUrlKey(target.url);
       if (!shouldVisitSyncTarget(target, { force, visitedUrls })) continue;
-      status.current = target.label || target.category || target.url;
-      onProgress({ ...status, running: true });
+      if (target.broadCandidate) status.broadPagesAttempted += 1;
+      status.current = target.label || target.category || 'clinical target';
+      onProgress({ ...status, errors: status.errors.map((error) => error.stage) });
       try {
+        let started = Date.now();
         await gotoWithFallback(worker, target);
-        if (target.category === 'visits') {
-          await openVisitClinicalNotesIfPresent(worker);
-        }
+        addTiming('navigation', started);
+        if (target.category === 'visits') await openVisitClinicalNotesIfPresent(worker);
+        started = Date.now();
         const extraction = await enrichExternalScanAttachments(worker, await extractPage(worker));
-        const saveResult = await store.saveExtractedPage(extraction);
+        addTiming('extraction', started);
+        started = Date.now();
+        const saveResult = await writeSession.mergeExtractedPage(extraction);
+        addTiming('storage', started);
         status.pagesVisited += 1;
+        const navigatedClass = target.routeClass || (target.refreshOnIncremental ? 'discovery' : 'clinical-detail');
+        status.navigatedRouteCounts[navigatedClass] = (status.navigatedRouteCounts[navigatedClass] || 0) + 1;
+        if (target.broadCandidate) status.broadPagesVisited += 1;
         status.recordsSaved += saveResult.recordCount;
-        visitedUrls[key] = new Date().toISOString();
-        enqueueExtractionLinks({
+        for (const delta of Object.keys(status.recordDeltas)) status.recordDeltas[delta] += saveResult.deltas?.[delta] || 0;
+        visitedUrls[normalizeUrlKey(target.url)] = new Date().toISOString();
+        if (target.priorityDetail || target.broadCandidate) canonicalCoverage[key] = new Date().toISOString();
+        const linkEvidence = enqueueExtractionLinks({
           queue,
+          exhaustiveCandidates,
           seen,
           extraction,
           target,
           priorityDetailCoverage,
+          canonicalCoverage,
+          expectedOrigin,
+          patientContextToken,
+          exhaustive: status.effectiveMode === 'exhaustive',
+          routeCounts: status.routeCounts,
         });
-        status.pagesPlanned = Math.max(status.pagesPlanned, status.pagesVisited + queue.length);
+        if (target.refreshOnIncremental || target.discoveryFallback) {
+          const evidence = classifyDiscoveryEvidence(extraction, linkEvidence);
+          if (evidence === 'malformed') {
+            unresolvedSuspicionCategories.add(target.category);
+            status.effectiveMode = 'exhaustive';
+            status.fallbackReason ||= 'malformed_or_missing_discovery';
+            if (target.fallbackUrl && !target.discoveryFallback) {
+              const fallbackKey = hashCanonicalIdentity(canonicalClinicalRouteIdentity(target.fallbackUrl, {
+                category: target.category,
+                patientContextToken,
+              }));
+              if (!seen.has(fallbackKey)) {
+                seen.add(fallbackKey);
+                queue.push({
+                  ...target,
+                  url: target.fallbackUrl,
+                  fallbackUrl: '',
+                  canonicalKey: fallbackKey,
+                  routeClass: 'discovery-fallback',
+                  broadCandidate: true,
+                  discoveryFallback: true,
+                });
+              }
+            }
+          } else {
+            unresolvedSuspicionCategories.delete(target.category);
+          }
+        }
+        status.pagesPlanned = Math.max(status.pagesPlanned, status.pagesVisited + queue.length + exhaustiveCandidates.length);
+        await persistRun({ checkpointIfDue: true });
       } catch (error) {
-        status.errors.push(`${target.url}: ${error.message}`);
-        visitedUrls[key] = new Date().toISOString();
+        const stage = 'page';
+        status.errors.push({ stage, category: target.category || 'unknown', message: error.name || 'Error' });
+        status.errorStages[stage] = (status.errorStages[stage] || 0) + 1;
       }
     }
-
+    status.completionReason ||= 'queue_exhausted';
+    for (const category of normalizedCategories) {
+      const hasError = status.errors.some((error) => error.category === category);
+      if (unresolvedSuspicionCategories.has(category)) status.categoryCompletion[category] = 'malformed';
+      else status.categoryCompletion[category] = hasError ? 'required_error' : 'completed';
+    }
     status.running = false;
-    status.status = status.errors.length ? 'success_with_errors' : 'success';
+    status.truncated = status.truncated || status.completionReason !== 'queue_exhausted';
+    status.freshnessSafe = !status.truncated
+      && status.errors.length === 0
+      && exhaustiveCandidates.length === 0
+      && unresolvedSuspicionCategories.size === 0;
+    status.success = status.freshnessSafe;
+    status.status = status.freshnessSafe ? 'success' : 'incomplete';
     status.finishedAt = new Date().toISOString();
-    await store.saveSyncMetadata({
-      ...metadata,
-      lastDeepSyncAt: status.finishedAt,
-      visitedUrls,
-    });
+    if (status.freshnessSafe) metadata.lastDeepSyncAt = status.finishedAt;
+    await persistRun({ forceCheckpoint: true });
+    status.checkpointWrites = writeSession.checkpointWrites;
     return status;
+  } catch (error) {
+    status.running = false;
+    status.success = false;
+    status.status = 'failed';
+    status.completionReason = 'fatal_error';
+    status.freshnessSafe = false;
+    status.finishedAt = new Date().toISOString();
+    await persistRun({ forceCheckpoint: true }).catch(() => {});
+    throw error;
   } finally {
-    await worker.close().catch(() => {});
+    process.removeListener('SIGINT', requestAbort);
+    process.removeListener('SIGTERM', requestAbort);
   }
 }

@@ -368,6 +368,7 @@
                     blockCount: sourceBlocks.length,
                     visitNoteBlockCount: category === 'visits' ? sourceBlocks.length : 0,
                     sourceBlockCount: sourceBlocks.length,
+                    explicitEmptyState: /\b(?:no|don't have any|do not have any)\s+(?:(?:new|upcoming|past)\s+)?(?:test\s+results?|results?|visits?|appointments?|records?)\b/i.test(mainText),
                     bodyLooksLikeVisitNote: looksLikeVisitNoteText(
                         normalizeText(documentRef.body?.innerText || ''),
                         'visits',

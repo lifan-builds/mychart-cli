@@ -84,6 +84,7 @@ export function filterRecordCards({
   patientLabelExact = '',
   patientKey = '',
   category = '',
+  categories = [],
   query = '',
 } = {}) {
   const recordsById = records instanceof Map
@@ -103,6 +104,11 @@ export function filterRecordCards({
     filteredCards = filteredCards.filter((card) => (
       String(card.patient?.label || card.patient?.name || '').replace(/\s+/g, ' ').trim().toLowerCase() === expectedLabel
     ));
+  }
+
+  if (categories.length) {
+    const categorySet = new Set(categories);
+    filteredCards = filteredCards.filter((card) => categorySet.has(card.category));
   }
 
   const state = createRecordBrowserState({

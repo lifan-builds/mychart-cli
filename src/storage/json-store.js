@@ -36,6 +36,8 @@ export function createEmptyStore(now = new Date().toISOString()) {
       lastIncrementalExportAt: '',
       visitedUrls: {},
       patientVisitedUrls: {},
+      canonicalCoverage: {},
+      syncRuns: {},
     },
   };
 }
@@ -179,72 +181,65 @@ export class JsonMedicalStore {
     return nextStore;
   }
 
-  async saveExtractedPage(extraction) {
-    const store = await this.readStore();
-    const {
-      sourceUrl,
-      normalizedRecords,
-      normalizedIndexCards,
-      quality,
-    } = prepareExtractedPageForStorage({
+  mergeExtractedPage(store, extraction) {
+    const { sourceUrl, normalizedRecords, normalizedIndexCards, quality } = prepareExtractedPageForStorage({
       extraction,
       normalizeRecord: (record) => this.normalizeRecord(record),
       normalizeIndexCard: (card) => this.normalizeIndexCard(card),
       createIndexCard: (record) => this.createIndexCard(record),
     });
-
     const recordIdsToDelete = new Set([
       ...getInvalidStoredVisitShellIds(store.records),
-      ...(sourceUrl
-        ? getIdsToReplaceForSource(store.records, normalizedRecords, sourceUrl)
-        : []),
+      ...(sourceUrl ? getIdsToReplaceForSource(store.records, normalizedRecords, sourceUrl) : []),
     ]);
     const indexIdsToDelete = new Set([
       ...getInvalidStoredVisitShellIds(store.indexCards),
-      ...(sourceUrl
-        ? getIdsToReplaceForSource(store.indexCards, normalizedIndexCards, sourceUrl)
-        : []),
-      ...getIndexCardIdsWithoutRecords(
-        store.indexCards,
-        store.records,
-        normalizedRecords,
-        recordIdsToDelete,
-      ),
+      ...(sourceUrl ? getIdsToReplaceForSource(store.indexCards, normalizedIndexCards, sourceUrl) : []),
+      ...getIndexCardIdsWithoutRecords(store.indexCards, store.records, normalizedRecords, recordIdsToDelete),
     ]);
-
-    const recordsById = new Map(
-      store.records
-        .filter((record) => !recordIdsToDelete.has(record.id))
-        .map((record) => [record.id, record]),
-    );
-    normalizedRecords.forEach((record) => recordsById.set(record.id, record));
-
-    const indexById = new Map(
-      store.indexCards
-        .filter((card) => !indexIdsToDelete.has(card.id))
-        .map((card) => [card.id, card]),
-    );
-    const missingIndexRecords = getRecordsWithoutIndexCards(
-      [...recordsById.values()],
-      [...indexById.values()],
-      [],
-    );
-    missingIndexRecords
+    const originalRecordsById = new Map(store.records.map((record) => [record.id, record]));
+    const recordsById = new Map(store.records
+      .filter((record) => !recordIdsToDelete.has(record.id)).map((record) => [record.id, record]));
+    let inserted = 0;
+    let updated = 0;
+    let unchanged = 0;
+    for (const record of normalizedRecords) {
+      const prior = originalRecordsById.get(record.id);
+      if (!prior) inserted += 1;
+      else if (JSON.stringify(prior) === JSON.stringify(record)) unchanged += 1;
+      else updated += 1;
+      recordsById.set(record.id, record);
+    }
+    const indexById = new Map(store.indexCards
+      .filter((card) => !indexIdsToDelete.has(card.id)).map((card) => [card.id, card]));
+    getRecordsWithoutIndexCards([...recordsById.values()], [...indexById.values()], [])
       .map((record) => this.createIndexCard(this.normalizeRecord(record)))
       .forEach((card) => indexById.set(card.id, card));
     normalizedIndexCards.forEach((card) => indexById.set(card.id, card));
-
-    await this.writeStore({
-      ...store,
-      records: [...recordsById.values()],
-      indexCards: [...indexById.values()],
-    });
-
+    store.records = [...recordsById.values()];
+    store.indexCards = [...indexById.values()];
     return {
       recordCount: normalizedRecords.length,
       indexCount: normalizedIndexCards.length,
       quality,
+      deltas: {
+        inserted,
+        updated,
+        unchanged,
+        deleted: [...recordIdsToDelete].filter((id) => !normalizedRecords.some((record) => record.id === id)).length,
+      },
     };
+  }
+
+  async saveExtractedPage(extraction) {
+    const store = await this.readStore();
+    const result = this.mergeExtractedPage(store, extraction);
+    await this.writeStore(store);
+    return result;
+  }
+
+  async openWriteSession({ checkpointPages = 10, checkpointMs = 10000 } = {}) {
+    return new JsonStoreWriteSession(this, await this.readStore(), { checkpointPages, checkpointMs });
   }
 
   async cleanupInvalidStoredData() {
@@ -300,6 +295,8 @@ export class JsonMedicalStore {
         lastIncrementalExportAt: metadata.lastIncrementalExportAt || '',
         visitedUrls: metadata.visitedUrls || {},
         patientVisitedUrls: metadata.patientVisitedUrls || {},
+        canonicalCoverage: metadata.canonicalCoverage || {},
+        syncRuns: metadata.syncRuns || {},
       },
     });
   }
@@ -332,6 +329,12 @@ export class JsonMedicalStore {
       sourceUrl: record.sourceUrl || record.source_url || '',
       extractedAt: record.extractedAt || record.timestamp || new Date().toISOString(),
     };
+    if (normalized.category === 'health-summary'
+      && /seattlechildrens\.org/i.test(normalized.sourceUrl)
+      && /(?:test|result|lab)/i.test(`${normalized.recordType || ''} ${normalized.sourceUrl}`)) {
+      normalized.category = 'test-results';
+      normalized.recordType = normalized.recordType || 'test-result';
+    }
     if (normalized.category === 'visits') {
       const sourceText = String(normalized.sourceText || normalized.rawText || '');
       const clinicalText = sanitizeStoredVisitText(normalized.clinicalText || normalized.rawText);
@@ -376,6 +379,12 @@ export class JsonMedicalStore {
       sourceUrl: card.sourceUrl || '',
       extractedAt: card.extractedAt || new Date().toISOString(),
     };
+    if (normalized.category === 'health-summary'
+      && /seattlechildrens\.org/i.test(normalized.sourceUrl)
+      && /(?:test|result|lab)/i.test(`${normalized.recordType || ''} ${normalized.sourceUrl}`)) {
+      normalized.category = 'test-results';
+      normalized.recordType = normalized.recordType || 'test-result';
+    }
     if (normalized.category === 'visits') {
       normalized.snippet = sanitizeStoredVisitText(normalized.snippet);
       normalized.title = sanitizeStoredVisitTitle(normalized.title, normalized.snippet);
@@ -396,6 +405,52 @@ export class JsonMedicalStore {
 
   hashText(value) {
     return hashText(value);
+  }
+}
+
+export class JsonStoreWriteSession {
+  constructor(owner, store, { checkpointPages, checkpointMs }) {
+    this.owner = owner;
+    this.store = store;
+    this.checkpointPages = checkpointPages;
+    this.checkpointMs = checkpointMs;
+    this.pendingPages = 0;
+    this.lastCheckpointAt = Date.now();
+    this.checkpointWrites = 0;
+  }
+
+  get syncMetadata() {
+    return this.store.syncMetadata;
+  }
+
+  get records() {
+    return this.store.records.map((record) => this.owner.normalizeRecord(record));
+  }
+
+  setSyncMetadata(metadata) {
+    this.store.syncMetadata = { ...this.store.syncMetadata, ...metadata };
+  }
+
+  async mergeExtractedPage(extraction) {
+    const result = this.owner.mergeExtractedPage(this.store, extraction);
+    this.pendingPages += 1;
+    return result;
+  }
+
+  async checkpointIfDue() {
+    if (this.pendingPages >= this.checkpointPages || Date.now() - this.lastCheckpointAt >= this.checkpointMs) {
+      return this.checkpoint();
+    }
+    return false;
+  }
+
+  async checkpoint({ force = false } = {}) {
+    if (!force && !this.pendingPages) return false;
+    this.store = await this.owner.writeStore(this.store);
+    this.pendingPages = 0;
+    this.lastCheckpointAt = Date.now();
+    this.checkpointWrites += 1;
+    return true;
   }
 }
 

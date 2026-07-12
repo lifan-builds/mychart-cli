@@ -31,20 +31,32 @@ import {
   switchMyChartProxyContext,
 } from '../browser/mychart-auth.js';
 import { loadEnvironmentFile } from './env.js';
+import { hashCanonicalIdentity, normalizeSyncCategories } from './sync-route-classifier.js';
+import { bindPatientContext } from '../browser/patient-context.js';
+import { readLiveHarnessSession } from '../browser/sync-runner.js';
 
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 export function createPullStateScopeKey(options = {}) {
   const categoryScope = Array.isArray(options.categories) && options.categories.length
-    ? options.categories.join(',')
+    ? [...new Set(options.categories.map((item) => String(item).trim().toLowerCase()))].sort().join(',')
     : options.category || '';
   return [
     `patientKey=${options.patientKey || ''}`,
     `patientLabel=${options.patientLabelExact || options.patient || ''}`,
+    ...(options._contextScope ? [`contextScope=${options._contextScope}`] : []),
     `categories=${categoryScope}`,
     `category=${options.category || ''}`,
     `query=${options.query || ''}`,
   ].join('|');
+}
+
+function normalizeLegacyPullStateKey(key = '') {
+  return String(key).split('|').map((part) => {
+    if (!part.startsWith('categories=')) return part;
+    const categories = part.slice('categories='.length).split(',').map((item) => item.trim().toLowerCase()).filter(Boolean);
+    return `categories=${[...new Set(categories)].sort().join(',')}`;
+  }).join('|');
 }
 
 export async function readPullState(statePath) {
@@ -101,7 +113,12 @@ export async function resolveSinceLastPullRange({
   const statePath = options.pullStatePath;
   const state = await readPullState(statePath);
   const stateKey = createPullStateScopeKey(options);
-  const savedDate = state.scopes?.[stateKey]?.lastClinicalDate || '';
+  const equivalentStateEntries = Object.entries(state.scopes || {})
+    .filter(([key]) => normalizeLegacyPullStateKey(key) === stateKey)
+    .map(([key, value]) => ({ key, date: value?.lastClinicalDate || '' }))
+    .filter((entry) => ISO_DATE_PATTERN.test(entry.date));
+  const savedEntry = equivalentStateEntries.sort((a, b) => b.date.localeCompare(a.date))[0];
+  const savedDate = savedEntry?.date || '';
   const fallbackDate = savedDate || await findLatestExportEndDateFromFilenames({ outputDir });
   const dateRange = fallbackDate
     ? { startDate: fallbackDate, endDate: latestDate }
@@ -119,7 +136,6 @@ export async function resolveSinceLastPullRange({
       startDate: latestDate,
       endDate: latestDate,
       state,
-      stateKey,
       statePath,
       fallbackSource: savedDate ? 'pull-state' : fallbackDate ? 'export-filename' : 'days',
     };
@@ -157,6 +173,15 @@ export function validateAgentExportOptions(options = {}) {
   if (options.days !== undefined && (!Number.isFinite(Number(options.days)) || Number(options.days) < 1)) {
     throw new Error('--days must be a positive number.');
   }
+  for (const [flag, value] of [
+    ['--max-pages', options.maxPages],
+    ['--max-records', options.maxRecords],
+    ['--max-broad-pages', options.maxBroadPages],
+  ]) {
+    if (value !== undefined && (!Number.isFinite(Number(value)) || Number(value) < 1)) {
+      throw new Error(`${flag} must be a positive number.`);
+    }
+  }
   if (options.timeoutSeconds !== undefined
     && (!Number.isFinite(Number(options.timeoutSeconds)) || Number(options.timeoutSeconds) < 1)) {
     throw new Error('--timeout-seconds must be a positive number.');
@@ -168,6 +193,15 @@ export function validateAgentExportOptions(options = {}) {
 }
 
 export async function runAgentExportWorkflow(options = {}) {
+  options = { ...options };
+  if (options.categories?.length) options.categories = normalizeSyncCategories(options.categories);
+  if (options.category) {
+    options.category = String(options.category).trim().toLowerCase();
+    normalizeSyncCategories([options.category]);
+  }
+  if (options.category && options.categories?.length && !options.categories.includes(options.category)) {
+    throw new Error('--category must be included in --categories when both are supplied.');
+  }
   validateAgentExportOptions(options);
   const format = options.format || 'jsonl';
   const outputDir = options.outputDir || process.cwd();
@@ -211,6 +245,10 @@ export async function runAgentExportWorkflow(options = {}) {
           seedUrls: options.seedUrls,
           maxRecords: options.maxRecords,
           maxPages: options.maxPages,
+          maxBroadPages: options.maxBroadPages,
+          exhaustive: options.exhaustive,
+          requireActivePatient: options.requireActivePatient,
+          profileDir: options.profileDir || DEFAULT_LIVE_PROFILE_DIR,
           storePath: options.storePath,
           timeoutSeconds: options.timeoutSeconds || DEFAULT_TIMEOUT_SECONDS,
           maxTransientRetries: options.maxTransientRetries ?? 1,
@@ -226,6 +264,16 @@ export async function runAgentExportWorkflow(options = {}) {
   const { cards, records, syncMetadata } = await readStoredRecords({
     storePath: options.storePath,
   });
+  const persistedFreshness = await resolvePersistedFreshness({ options, syncMetadata });
+  const freshness = syncStatus
+    ? {
+        ...persistedFreshness,
+        safe: Boolean(syncStatus.freshnessSafe && persistedFreshness.safe),
+        status: syncStatus.freshnessSafe && persistedFreshness.safe ? 'safe' : 'unsafe',
+        run: syncStatus,
+      }
+    : persistedFreshness;
+  if (freshness.scopeKey) options._contextScope = freshness.scopeKey;
   const filtered = filterRecordCards({
     cards,
     records,
@@ -233,6 +281,7 @@ export async function runAgentExportWorkflow(options = {}) {
     patientLabelExact: options.patientLabelExact,
     patientKey: options.patientKey,
     category: options.category,
+    categories: options.categories || [],
     query: options.query,
   });
   const latestClinicalDate = getLatestClinicalDateFromCards(filtered.cards);
@@ -280,6 +329,7 @@ export async function runAgentExportWorkflow(options = {}) {
     dateRange,
     outputPath,
     recordCount,
+    freshnessSafe: freshness.safe,
   });
 
   return {
@@ -303,9 +353,11 @@ export async function runAgentExportWorkflow(options = {}) {
       totalCardCount: filtered.totalCardCount,
     },
     lastDeepSyncAt: syncMetadata?.lastDeepSyncAt || '',
+    freshnessSafe: freshness.safe,
+    freshnessStatus: freshness.status || (freshness.safe ? 'safe' : 'unsafe'),
     sync: summarizeSyncStatus(syncStatus),
     login: loginStatus ? { status: loginStatus.status || '' } : null,
-    proxy: proxyStatus ? { status: proxyStatus.status || '', text: proxyStatus.text || '' } : null,
+    proxy: proxyStatus ? { status: proxyStatus.status || '' } : null,
     pullState,
     categoryCounts: countBy(exportDownload.exportedCards, (card) => card.category || 'record'),
     sourceHostCounts: countSourceHosts(exportDownload.exportedCards, filtered.recordsById),
@@ -314,6 +366,37 @@ export async function runAgentExportWorkflow(options = {}) {
     babySafeSummary: createBabySafeSummary(exportDownload.exportedCards, filtered.recordsById),
     filename: exportDownload.filename,
   };
+}
+
+async function resolvePersistedFreshness({ options = {}, syncMetadata = {} } = {}) {
+  if (!options.requireActivePatient || !options.categories?.length) {
+    return { safe: false, status: 'unknown' };
+  }
+  try {
+    const profileDir = options.profileDir || DEFAULT_LIVE_PROFILE_DIR;
+    const session = await readLiveHarnessSession({ profileDir });
+    const origin = new URL(session.mychartUrl).origin;
+    const binding = await bindPatientContext({
+      profileDir,
+      origin,
+      normalizedLabel: String(options.requireActivePatient).replace(/\s+/g, ' ').trim().toLowerCase(),
+      validated: false,
+    });
+    if (!binding.bound) return { safe: false, status: 'unknown' };
+    const scopeKey = hashCanonicalIdentity(`${origin}|${binding.token}|${options.categories.join(',')}`);
+    const run = syncMetadata.syncRuns?.[scopeKey];
+    if (!run || run.inProgress) {
+      return { safe: false, status: run?.inProgress ? 'interrupted' : 'unknown', scopeKey };
+    }
+    return {
+      safe: Boolean(run.freshnessSafe),
+      status: run.freshnessSafe ? 'safe' : 'unsafe',
+      run,
+      scopeKey,
+    };
+  } catch {
+    return { safe: false, status: 'unknown' };
+  }
 }
 
 async function resolveExportDateRange({
@@ -385,18 +468,27 @@ async function maybeUpdatePullState({
   dateRange,
   outputPath,
   recordCount,
+  freshnessSafe = false,
 } = {}) {
   if (!options.sinceLastPull) {
     return { enabled: false, updated: false };
   }
   const statePath = dateRange.statePath || options.pullStatePath;
   const stateKey = dateRange.stateKey || createPullStateScopeKey(options);
+  if (!freshnessSafe) {
+    return {
+      enabled: true,
+      updated: false,
+      path: statePath,
+      lastClinicalDate: dateRange.endDate || '',
+      reason: 'freshness-unsafe',
+    };
+  }
   if (recordCount <= 0) {
     return {
       enabled: true,
       updated: false,
       path: statePath,
-      stateKey,
       lastClinicalDate: dateRange.endDate || '',
       reason: 'no-records-exported',
     };
@@ -421,7 +513,6 @@ async function maybeUpdatePullState({
     enabled: true,
     updated: true,
     path: statePath,
-    stateKey,
     lastClinicalDate: dateRange.endDate || '',
     fallbackSource: dateRange.fallbackSource || '',
   };
@@ -434,8 +525,24 @@ function summarizeSyncStatus(syncStatus) {
     success: Boolean(syncStatus.success),
     pagesPlanned: syncStatus.pagesPlanned || 0,
     pagesVisited: syncStatus.pagesVisited || 0,
+    broadPagesAttempted: syncStatus.broadPagesAttempted || 0,
+    broadPagesVisited: syncStatus.broadPagesVisited || 0,
     recordsSaved: syncStatus.recordsSaved || 0,
     errorCount: (syncStatus.errors || []).length,
+    completionReason: syncStatus.completionReason || '',
+    truncated: Boolean(syncStatus.truncated),
+    freshnessSafe: Boolean(syncStatus.freshnessSafe),
+    requestedMode: syncStatus.requestedMode || '',
+    effectiveMode: syncStatus.effectiveMode || '',
+    fallbackReason: syncStatus.fallbackReason || '',
+    activePatientContext: syncStatus.activePatientContext || '',
+    requestedCategories: syncStatus.requestedCategories || [],
+    categoryCompletion: syncStatus.categoryCompletion || {},
+    routeCounts: syncStatus.routeCounts || {},
+    navigatedRouteCounts: syncStatus.navigatedRouteCounts || {},
+    stageTimingsMs: syncStatus.stageTimingsMs || {},
+    recordDeltas: syncStatus.recordDeltas || {},
+    checkpointWrites: syncStatus.checkpointWrites || 0,
     startedAt: syncStatus.startedAt || '',
     finishedAt: syncStatus.finishedAt || '',
   };

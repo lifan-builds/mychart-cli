@@ -19,7 +19,7 @@ test('createPullStateScopeKey scopes by patient, sync categories, export categor
       category: 'test-results',
       query: 'scan',
     }),
-    'patientKey=|patientLabel=Demo Child|categories=visits,test-results|category=test-results|query=scan',
+    'patientKey=|patientLabel=Demo Child|categories=test-results,visits|category=test-results|query=scan',
   );
 });
 
@@ -199,19 +199,14 @@ test('runAgentExportWorkflow writes export and returns safe machine-readable sum
   assert.deepEqual(summary.sourceHostCounts, { 'mychart.example.test': 2 });
   assert.equal(summary.stored.recordCount, 3);
   assert.equal(summary.stored.indexCardCount, 3);
-  assert.equal(summary.pullState.updated, true);
-  assert.equal(summary.pullState.lastClinicalDate, '2026-06-10');
+  assert.equal(summary.pullState.updated, false);
+  assert.equal(summary.pullState.reason, 'freshness-unsafe');
+  assert.equal(summary.freshnessSafe, false);
   assert.equal(JSON.stringify(summary).includes('White Blood Cells'), false);
 
   const exportContent = await readFile(summary.outputPath, 'utf8');
   const lines = exportContent.trim().split('\n').map((line) => JSON.parse(line));
   assert.deepEqual(lines.map((line) => line.type), ['manifest', 'record', 'record', 'chunk', 'chunk']);
 
-  const state = JSON.parse(await readFile(pullStatePath, 'utf8'));
-  const stateKey = createPullStateScopeKey({
-    patientLabelExact: 'Demo Child',
-    categories: ['visits', 'test-results'],
-  });
-  assert.equal(state.scopes[stateKey].lastClinicalDate, '2026-06-10');
-  assert.equal(state.scopes[stateKey].lastRecordCount, 2);
+  await assert.rejects(() => readFile(pullStatePath, 'utf8'), /ENOENT/);
 });

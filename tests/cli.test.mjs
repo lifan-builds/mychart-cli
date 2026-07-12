@@ -31,11 +31,18 @@ test('CLI help advertises agent-facing commands', async () => {
   assert.doesNotMatch(output, /\b(?:AI|LLM|medical advice)\b/i);
 });
 
-test('CLI sync parses value-bearing options as sync options', async () => {
+test('CLI sync parses value-bearing options as sync options without ambient CDP', async () => {
+  const profileDir = await mkdtemp(path.join(tmpdir(), 'mychart-cli-no-session-'));
   await assert.rejects(
-    () => main(['sync', '--switch-patient', 'Demo Child', '--seed-url', 'https://example.test/mychart/app/test-results/details?eorderid=1', '--max-pages', '1']),
-    /Could not read mychart-cli live harness session|fetch failed|connect ECONNREFUSED|No MyChart page is available/,
+    () => main(['sync', '--profile', profileDir, '--switch-patient', 'Demo Child', '--seed-url', 'https://example.test/mychart/app/test-results/details?eorderid=1', '--max-pages', '1']),
+    /Could not read mychart-cli live harness session/,
   );
+});
+
+test('CLI sync rejects invalid budgets and categories before opening a browser session', async () => {
+  await assert.rejects(() => main(['sync', '--max-pages', '0']), /--max-pages must be a positive number/);
+  await assert.rejects(() => main(['sync', '--max-broad-pages', 'NaN']), /--max-broad-pages must be a positive number/);
+  await assert.rejects(() => main(['sync', '--categories', 'billing']), /Unsupported sync categories/);
 });
 
 test('browser ensure detaches a launched browser process for one-shot exit', () => {
@@ -69,7 +76,7 @@ test('browser ensure detach helper tolerates an existing browser session', () =>
   assert.doesNotThrow(() => detachLaunchedBrowserForOneShot(null));
 });
 
-test('CLI export emits safe JSON summary and updates since-last-pull state', async () => {
+test('CLI export emits safe JSON summary and protects state without scoped freshness', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'mychart-cli-export-'));
   const storePath = path.join(dir, 'store.json');
   const outputDir = path.join(dir, 'exports');
@@ -129,11 +136,11 @@ test('CLI export emits safe JSON summary and updates since-last-pull state', asy
   assert.equal(summary.recordCount, 1);
   assert.equal(summary.chunkCount, 1);
   assert.equal(summary.outputPath.startsWith(outputDir), true);
-  assert.equal(summary.pullState.updated, true);
+  assert.equal(summary.pullState.updated, false);
+  assert.equal(summary.pullState.reason, 'freshness-unsafe');
   assert.equal(JSON.stringify(summary).includes('White Blood Cells'), false);
 
   const exportText = await readFile(summary.outputPath, 'utf8');
   assert.match(exportText, /"type":"manifest"/);
-  const state = JSON.parse(await readFile(pullStatePath, 'utf8'));
-  assert.equal(Object.values(state.scopes)[0].lastClinicalDate, '2026-06-10');
+  await assert.rejects(() => readFile(pullStatePath, 'utf8'), /ENOENT/);
 });

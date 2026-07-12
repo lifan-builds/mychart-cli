@@ -71,13 +71,28 @@ portal you can already access in a browser before running live sync commands.
 npm run mychart -- --help
 npm run mychart -- browser ensure --headless --validate --wait
 npm run mychart -- browser validate
-npm run mychart -- sync --login --categories visits,test-results --timeout-seconds 600
+npm run mychart -- sync --login --categories visits,test-results --require-active-patient Felix --timeout-seconds 600
 npm run mychart -- records list --category test-results
 npm run mychart -- export jsonl --latest-day --output /tmp/mychart.jsonl
 npm run mychart -- export jsonl --sync --since-last-pull --pull-state /tmp/mychart-state.json --output-dir /tmp --json-summary
 npm run mychart -- export inspect /tmp/mychart.jsonl
 npm run mychart -- export markdown --latest-day --output /tmp/mychart.md
 ```
+
+Sync defaults to strict adaptive traversal: requested discovery pages refresh,
+recognized visit/result details are traversed, and trend/static/auth/language
+routes are rejected. Credible unrecognized clinical routes trigger bounded
+fallback in the same run. `--exhaustive` starts that bounded mode directly and
+`--max-broad-pages` changes its default 25-page budget. Summaries expose
+completion reason, truncation, freshness safety, effective mode, sanitized route
+and timing counts, and inserted/updated/unchanged/deleted deltas.
+
+`--require-active-patient` validates the exact active browser context before any
+crawl/store mutation. Checkpointed partial output remains usable after caps or
+interruptions, but pull state and last-safe-sync metadata advance only after a
+freshness-safe exact category/context scope. `--categories` also filters export
+records. Seattle Children's result-shaped legacy `health-summary` records are
+read-normalized to `test-results`.
 
 Use `export jsonl` for agent ingestion. The JSONL file starts with a manifest
 line, then emits record metadata lines and deterministic text chunk lines.

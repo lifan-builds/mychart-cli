@@ -155,29 +155,57 @@ function dedupeExportCards(cards = [], recordsById = new Map(), {
   };
 }
 
-function duplicateKeyForCard(card = {}, record = {}, { startDate = '', endDate = '' } = {}) {
-  const sourceUrl = card.sourceUrl || record.sourceUrl || '';
+function duplicateKeyForCard(card = {}, record = {}) {
+  const sourceUrl = canonicalExportSource(card.sourceUrl || record.sourceUrl || '');
   const analyte = record.metadata?.analyte || card.metadata?.analyte || card.title || record.title || '';
   const date = normalizeClinicalDateForRange(card.date || record.date || '');
-  if (!sourceUrl || !analyte || !date) return '';
+  const patient = card.patient || record.patient || {};
+  const patientIdentity = patient.key || patient.label || patient.name || '';
+  if (!sourceUrl || !analyte || !date || !patientIdentity) return '';
   return [
+    String(patientIdentity).replace(/\s+/g, ' ').trim().toLowerCase(),
     sourceUrl,
     String(analyte).replace(/\s+/g, ' ').trim().toLowerCase(),
-    startDate || date,
-    endDate || date,
+    date,
   ].join('|');
 }
 
+function canonicalExportSource(value = '') {
+  try {
+    const url = new URL(value);
+    url.hash = '';
+    for (const key of [...url.searchParams.keys()]) {
+      if (/^(?:utm_|tracking|from|view|tab|pageMode$)/i.test(key)) url.searchParams.delete(key);
+    }
+    url.searchParams.sort();
+    return url.href;
+  } catch {
+    return String(value);
+  }
+}
+
 function chooseBetterDuplicate(left, right) {
-  return scoreDuplicateCandidate(right) > scoreDuplicateCandidate(left) ? right : left;
+  return compareDuplicateCandidates(right, left) > 0 ? right : left;
+}
+
+function compareDuplicateCandidates(left, right) {
+  const leftScore = scoreDuplicateCandidate(left);
+  const rightScore = scoreDuplicateCandidate(right);
+  for (let index = 0; index < leftScore.length; index += 1) {
+    if (leftScore[index] === rightScore[index]) continue;
+    return leftScore[index] > rightScore[index] ? 1 : -1;
+  }
+  return 0;
 }
 
 function scoreDuplicateCandidate({ card = {}, record = {} } = {}) {
+  const extractedAt = Date.parse(record.extractedAt || card.extractedAt || '');
   return [
-    record.metadata?.labValues ? 100000 : 0,
+    record.metadata?.labValues ? 1 : 0,
     Buffer.byteLength(getRecordDisplayText(record, card), 'utf8'),
-    record.extractedAt || card.extractedAt || '',
-  ].reduce((total, value) => total + (typeof value === 'number' ? value : 0), 0);
+    Number.isNaN(extractedAt) ? 0 : extractedAt,
+    String(card.id || record.id || ''),
+  ];
 }
 
 function buildClinicalDeltaReport(cards = [], recordsById = new Map(), {

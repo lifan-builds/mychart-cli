@@ -186,6 +186,19 @@ test('buildAgentJsonlExport dedupes repeated source analyte date rows and emits 
   assert.equal(records.find((line) => line.recordId === 'pco2-a').metadata.labValues.pCO2, 36);
 });
 
+test('JSONL dedupe preserves cross-day records and is stable under reversed input', () => {
+  const records = [
+    { id: 'older', patient: { key: 'felix' }, category: 'test-results', title: 'Panel', date: '2026-07-10', rawText: 'older', sourceUrl: 'https://example.test/details?eorderid=1&pageMode=1', extractedAt: '2026-07-10T12:00:00Z' },
+    { id: 'newer-short', patient: { key: 'felix' }, category: 'test-results', title: 'Panel', date: '2026-07-11', rawText: 'x', sourceUrl: 'https://example.test/details?pageMode=2&eorderid=1', extractedAt: '2026-07-11T12:00:00Z' },
+    { id: 'newer-best', patient: { key: 'felix' }, category: 'test-results', title: 'Panel', date: '2026-07-11', rawText: 'more complete same-day value', sourceUrl: 'https://example.test/details?eorderid=1', extractedAt: '2026-07-11T13:00:00Z' },
+  ];
+  const cards = records.map((record) => ({ ...record, snippet: record.rawText }));
+  const forward = buildAgentJsonlExport({ cards, records, startDate: '2026-07-10', endDate: '2026-07-11' });
+  const reverse = buildAgentJsonlExport({ cards: [...cards].reverse(), records: [...records].reverse(), startDate: '2026-07-10', endDate: '2026-07-11' });
+  assert.deepEqual(forward.exportedCards.map((card) => card.id).sort(), ['newer-best', 'older']);
+  assert.deepEqual(reverse.exportedCards.map((card) => card.id).sort(), ['newer-best', 'older']);
+});
+
 test('inspectAgentJsonlExportContent summarizes records instead of counting raw lines', () => {
   const exportDownload = buildAgentJsonlExport({
     generatedAt: '2026-06-10T12:00:00.000Z',

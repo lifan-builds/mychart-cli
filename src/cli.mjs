@@ -12,6 +12,7 @@ import {
 } from './core/record-exports.js';
 import { inspectAgentJsonlExportFile } from './core/export-inspect.js';
 import { runAgentExportWorkflow } from './core/agent-export-workflow.js';
+import { normalizeSyncCategories } from './core/sync-route-classifier.js';
 import {
   DEFAULT_LIVE_PROFILE_DIR,
   DEFAULT_TIMEOUT_SECONDS,
@@ -33,7 +34,7 @@ function usage() {
   node src/cli.mjs browser check
   node src/cli.mjs browser validate
   node src/cli.mjs browser ensure [--headless|--visible] [--validate] [--wait] [--timeout-seconds N] [--profile PATH] [--url URL]
-  node src/cli.mjs sync [--login] [--categories visits,test-results] [--seed-url URL] [--force] [--max-pages N] [--max-records N] [--switch-patient TEXT]
+  node src/cli.mjs sync [--login] [--categories visits,test-results] [--require-active-patient TEXT] [--exhaustive] [--max-broad-pages N] [--seed-url URL] [--force] [--max-pages N] [--max-records N] [--switch-patient TEXT]
   node src/cli.mjs records list [--patient-label-exact TEXT] [--category TEXT] [--query TEXT] [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--json] [--store PATH]
   node src/cli.mjs records show --id ID [--json]
   node src/cli.mjs export markdown [--sync] [--latest-day|--since-last-pull --pull-state PATH|--days N|--start-date YYYY-MM-DD --end-date YYYY-MM-DD|--all] [--output PATH|--output-dir PATH] [--json-summary] [--store PATH]
@@ -67,6 +68,9 @@ function parseOptions(argv) {
     else if (arg === '--force') options.force = true;
     else if (arg === '--max-pages') options.maxPages = Number(next());
     else if (arg === '--max-records') options.maxRecords = Number(next());
+    else if (arg === '--max-broad-pages') options.maxBroadPages = Number(next());
+    else if (arg === '--exhaustive') options.exhaustive = true;
+    else if (arg === '--require-active-patient') options.requireActivePatient = next();
     else if (arg === '--switch-patient') options.switchPatient = next();
     else if (arg === '--timeout-seconds') options.timeoutSeconds = Number(next());
     else if (arg === '--max-sync-age-minutes') options.maxSyncAgeMinutes = Number(next());
@@ -215,6 +219,17 @@ export function detachLaunchedBrowserForOneShot(launched) {
 }
 
 async function commandSync(options) {
+  options.categories = normalizeSyncCategories(options.categories || []);
+  for (const [flag, value] of [
+    ['--max-pages', options.maxPages],
+    ['--max-records', options.maxRecords],
+    ['--max-broad-pages', options.maxBroadPages],
+    ['--timeout-seconds', options.timeoutSeconds],
+  ]) {
+    if (value !== undefined && (!Number.isFinite(value) || value < 1)) {
+      throw new Error(`${flag} must be a positive number.`);
+    }
+  }
   await withSession(options, async ({ browser, page, session }) => {
     if (options.login) {
       await loadEnvironmentFile({ envPath: options.envFile });
@@ -233,7 +248,7 @@ async function commandSync(options) {
         patient: options.switchPatient,
         timeoutSeconds: options.timeoutSeconds || DEFAULT_TIMEOUT_SECONDS,
       });
-      console.error(`MyChart patient context: ${proxy.status}${proxy.text ? ` (${proxy.text})` : ''}`);
+      console.error(`MyChart patient context: ${proxy.status}`);
     }
     const status = await triggerRawDeepSync(page, {
       browser,
@@ -243,6 +258,11 @@ async function commandSync(options) {
       seedUrls: options.seedUrls,
       maxRecords: options.maxRecords,
       maxPages: options.maxPages,
+      maxBroadPages: options.maxBroadPages,
+      exhaustive: options.exhaustive,
+      requireActivePatient: options.requireActivePatient,
+      profileDir: options.profileDir || DEFAULT_LIVE_PROFILE_DIR,
+      storePath: options.storePath,
       timeoutSeconds: options.timeoutSeconds || DEFAULT_TIMEOUT_SECONDS,
       onProgress: (progress) => {
         console.error(

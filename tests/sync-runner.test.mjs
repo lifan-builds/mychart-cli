@@ -8,9 +8,16 @@ import {
 } from '../src/browser/document-attachments.js';
 import {
   buildPriorityDetailCoverage,
+  classifyDiscoveryEvidence,
   enrichVisitNoteFromHeader,
   shouldVisitSyncTarget,
 } from '../src/browser/sync-runner.js';
+
+test('discovery evidence distinguishes explicit empty/all-covered links from malformed pages', () => {
+  assert.equal(classifyDiscoveryEvidence({ records: [] }, { admissibleCount: 2 }), 'classified');
+  assert.equal(classifyDiscoveryEvidence({ records: [], page: { debug: { explicitEmptyState: true } } }), 'explicit-empty');
+  assert.equal(classifyDiscoveryEvidence({ records: [], page: { debug: { explicitEmptyState: false } } }), 'malformed');
+});
 
 test('routine sync revisits marked discovery targets even when URL was visited', () => {
   const visitedUrls = {
@@ -69,6 +76,18 @@ test('routine sync skips already covered priority details', () => {
       priorityDetail: true,
       hasStoredRecord: true,
     }, { visitedUrls }),
+    false,
+  );
+});
+
+test('patient-scoped canonical coverage skips an equivalent unvisited URL variant', () => {
+  assert.equal(
+    shouldVisitSyncTarget({
+      url: 'https://mychart.example.test/MyChart/app/test-results/details?pageMode=2&eorderid=1',
+      category: 'test-results',
+      priorityDetail: true,
+      hasStoredRecord: true,
+    }, { visitedUrls: {} }),
     false,
   );
 });
