@@ -1,0 +1,41 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ── Environment ──────────────────────────────────────────────────────────────
+.env
+.venv/
+venv/
+
+# ── Data (sensitive medical records) ─────────────────────────────────────────
+data/
+.awesome-mychart/
+*.db
+*.sqlite
+*.sqlite3
+
+# ── IDE ──────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# ── Testing ──────────────────────────────────────────────────────────────────
+node_modules/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ── browser-use ──────────────────────────────────────────────────────────────
+browser_profiles/
+screenshots/
+recordings/
+
+# ── uv ───────────────────────────────────────────────────────────────────────
+.python-version

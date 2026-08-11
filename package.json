@@ -1,0 +1,56 @@
+{
+  "name": "@lifan-builds/mychart-cli",
+  "version": "0.1.0",
+  "description": "Local-first CLI for exporting patient-owned MyChart records through a Chrome/Puppeteer harness.",
+  "license": "MIT",
+  "bin": {
+    "mychart-cli": "src/cli.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    ".env.example",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "LICENSE",
+    "PRIVACY.md",
+    "README.md",
+    "SECURITY.md",
+    "docs/",
+    "scripts/",
+    "src/"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lifan-builds/mychart-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/lifan-builds/mychart-cli/issues"
+  },
+  "homepage": "https://github.com/lifan-builds/mychart-cli#readme",
+  "keywords": [
+    "mychart",
+    "epic",
+    "health-records",
+    "local-first",
+    "cli"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "mychart": "node src/cli.mjs",
+    "check:release": "node scripts/check-release.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "init:live": "node scripts/init-live-harness.mjs",
+    "init:live:headless": "node scripts/init-live-headless.mjs",
+    "launch:live": "node scripts/launch-live-harness.mjs",
+    "check:live": "node scripts/check-live-harness.mjs",
+    "validate:live": "node scripts/validate-live-harness.mjs",
+    "export:recent": "node scripts/export-recent-records.mjs"
+  },
+  "dependencies": {
+    "puppeteer-core": "^24.43.0"
+  }
+}
