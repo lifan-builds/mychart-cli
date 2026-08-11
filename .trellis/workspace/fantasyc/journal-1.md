@@ -38,3 +38,35 @@ Released the sanitized npm and GitHub public beta, published the verified launch
 ### Next Steps
 
 - Wait for r/NICUParents moderator approval before any caregiver post.
+
+
+## Session 2: Merge Trellis 0.6.14 upgrade
+
+**Date**: 2026-08-11
+**Task**: Merge Trellis 0.6.14 upgrade
+**Branch**: `codex/record-trellis-upgrade-merge`
+
+### Summary
+
+Validated and merged the Trellis 0.6.14 generated runtime upgrade in mychart-cli and self-promoting; both repositories ended synchronized and clean.
+
+### Main Changes
+
+- Merged mychart-cli PR #2 and self-promoting PR #2.
+- Verified archived-task context remapping in disposable clones.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6fe919f` | (see git log) |
+
+### Testing
+
+- [OK] 210 deterministic mychart-cli tests passed after merge.
+- [OK] Node 20/22 CI passed on macOS and Ubuntu.
+- [OK] self-promoting safe routing and Trellis hook checks passed.
+
+### Status
+
+[OK] **Completed**
