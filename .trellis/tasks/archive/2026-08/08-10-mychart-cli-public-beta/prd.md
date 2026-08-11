@@ -43,8 +43,8 @@ limitations, and release-quality GitHub packaging.
 - [x] Tests cover path precedence, legacy compatibility, private permissions,
   demo output, and safe-summary redaction.
 - [x] CI covers Node 20/22 on macOS and Ubuntu with package/privacy checks.
-- [ ] The tree, tarball, promotion inputs, and release history pass privacy scans.
-- [ ] GitHub `v0.1.0`, npm `0.1.0`, topics, security flow, and branch protection
+- [x] The tree, tarball, promotion inputs, and release history pass privacy scans.
+- [x] GitHub `v0.1.0`, npm `0.1.0`, topics, security flow, and branch protection
   are verified after action-time approval.
 
 ## Out of Scope
