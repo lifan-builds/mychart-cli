@@ -57,7 +57,6 @@ export function resolveMyChartPaths({
 
 const DEFAULT_PATHS = resolveMyChartPaths();
 
-export const DEFAULT_DATA_HOME = DEFAULT_PATHS.dataHome;
 export const DEFAULT_LIVE_PROFILE_DIR = DEFAULT_PATHS.profileDir;
 export const DEFAULT_STORE_PATH = DEFAULT_PATHS.storePath;
 export const DEFAULT_ATTACHMENTS_DIR = DEFAULT_PATHS.attachmentsDir;

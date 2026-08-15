@@ -63,10 +63,6 @@ export function createSourceUrlKey(sourceUrl = '') {
     }
 }
 
-export function createSyncUrlKey(url) {
-    return createSourceUrlKey(url);
-}
-
 export function createVisitCsnKey(sourceUrl = '') {
     try {
         const parsed = new URL(sourceUrl);

@@ -447,17 +447,6 @@ function recordHasDownloadedAttachment(record = {}) {
     .some((attachment) => attachment.status === 'downloaded' && attachment.filePath);
 }
 
-function shouldEnqueueLink(link = {}, target = {}) {
-  const haystack = `${link.text || ''} ${link.href || ''}`;
-  if (target.category === 'test-results') {
-    return /\b(?:detail|result|component|eorderid|orderid|resultid|view)\b/i.test(haystack);
-  }
-  if (target.category === 'visits') {
-    return /\b(?:visit|notes?|after visit|summary|clinical|past-details|csn|hnoID)\b/i.test(haystack);
-  }
-  return /\b(?:view|details?|summary)\b/i.test(haystack);
-}
-
 function isSelfHashLink(href = '', sourceUrl = '') {
   if (!href || !sourceUrl) return false;
   return normalizeUrlKey(href) === normalizeUrlKey(sourceUrl)
