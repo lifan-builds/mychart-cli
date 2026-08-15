@@ -52,11 +52,19 @@ export const VISIT_NOTE_READY_PATTERN = [
     'instructions?\\s*:',
 ].join('|');
 
+export const VISIT_NOTE_MIN_TEXT_LENGTH = 500;
+
 const MYCHART_SHELL_PATTERN =
     /<meta\s+http-equiv=["']refresh["'][^>]+\/mychart\/nojs\.asp|InitialBodyClass|--cnp-primary-main|EpicPx\.ReactContext|--primary-main|WP\.Strings\.getNamespace|top\.location\s*=\s*["']\/mychart\/Home\/LogOut|if\s*\(\s*typeof\s+WP\s*===\s*['"]undefined['"]\s*\)/i;
 
 export function hasStoredVisitNoteSubstance(text = '') {
     return new RegExp(VISIT_NOTE_READY_PATTERN, 'i').test(text || '');
+}
+
+export function hasClinicalVisitNoteText(text) {
+    const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+    return normalized.length >= VISIT_NOTE_MIN_TEXT_LENGTH
+        && hasStoredVisitNoteSubstance(normalized);
 }
 
 export function sanitizeStoredVisitText(text = '') {

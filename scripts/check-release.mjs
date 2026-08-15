@@ -29,6 +29,8 @@ assert(packageJson.dependencies?.['puppeteer-core'], 'puppeteer-core must be a r
 
 const { stdout } = await execFileAsync('npm', ['pack', '--dry-run', '--json'], { cwd: root });
 const pack = JSON.parse(stdout)[0];
+const packedPaths = new Set((pack.files || []).map((file) => file.path));
+assert(packedPaths.has('scripts/init-live-harness.sh'), 'missing published live-harness compatibility launcher');
 for (const file of pack.files || []) {
   const topLevel = file.path.split('/', 1)[0];
   assert(allowedTopLevel.has(topLevel), `package contains non-release path: ${file.path}`);
