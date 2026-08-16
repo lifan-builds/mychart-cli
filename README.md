@@ -81,6 +81,10 @@ mychart-cli sync \
 
 Use the exact chart-owner label shown by MyChart for
 `--require-active-patient`. This validation happens before the store changes.
+When an export also receives this option, it implicitly applies the same exact
+patient-label filter unless `--patient`, `--patient-label-exact`, or
+`--patient-key` is supplied. Empty patient filters do not disable that default,
+so shared stored records and `--since-last-pull` state remain patient-scoped.
 
 ## Read and export records
 
@@ -98,6 +102,11 @@ review. Both formats can contain sensitive medical information.
 `--json-summary` prints metadata such as counts, date range, completion state,
 and category totals. It omits patient names, clinical titles, raw portal text,
 queries, and source hosts.
+
+Freshness and completion claims apply only to the categories and portal
+surfaces requested for that sync. A safe `visits,test-results` sync does not
+establish coverage of messages, general documents, or other unrequested portal
+surfaces.
 
 ## What stays local
 

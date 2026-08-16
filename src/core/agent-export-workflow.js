@@ -38,17 +38,41 @@ import { readLiveHarnessSession } from '../browser/sync-runner.js';
 
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
+function normalizePatientFilterValue(value) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function normalizePatientScopeOptions(options = {}) {
+  const normalized = { ...options };
+  const patient = normalizePatientFilterValue(options.patient);
+  const patientLabelExact = normalizePatientFilterValue(options.patientLabelExact);
+  const patientKey = normalizePatientFilterValue(options.patientKey);
+  const requireActivePatient = normalizePatientFilterValue(options.requireActivePatient);
+
+  normalized.patient = patient;
+  normalized.patientLabelExact = patientLabelExact;
+  normalized.patientKey = patientKey;
+  normalized.requireActivePatient = requireActivePatient;
+
+  if (!patient && !patientLabelExact && !patientKey && requireActivePatient) {
+    normalized.patientLabelExact = requireActivePatient;
+  }
+
+  return normalized;
+}
+
 export function createPullStateScopeKey(options = {}) {
-  const categoryScope = Array.isArray(options.categories) && options.categories.length
-    ? [...new Set(options.categories.map((item) => String(item).trim().toLowerCase()))].sort().join(',')
-    : options.category || '';
+  const normalizedOptions = normalizePatientScopeOptions(options);
+  const categoryScope = Array.isArray(normalizedOptions.categories) && normalizedOptions.categories.length
+    ? [...new Set(normalizedOptions.categories.map((item) => String(item).trim().toLowerCase()))].sort().join(',')
+    : normalizedOptions.category || '';
   return [
-    `patientKey=${options.patientKey || ''}`,
-    `patientLabel=${options.patientLabelExact || options.patient || ''}`,
-    ...(options._contextScope ? [`contextScope=${options._contextScope}`] : []),
+    `patientKey=${normalizedOptions.patientKey || ''}`,
+    `patientLabel=${normalizedOptions.patientLabelExact || normalizedOptions.patient || ''}`,
+    ...(normalizedOptions._contextScope ? [`contextScope=${normalizedOptions._contextScope}`] : []),
     `categories=${categoryScope}`,
-    `category=${options.category || ''}`,
-    `query=${options.query || ''}`,
+    `category=${normalizedOptions.category || ''}`,
+    `query=${normalizedOptions.query || ''}`,
   ].join('|');
 }
 
@@ -193,7 +217,7 @@ export function validateAgentExportOptions(options = {}) {
 }
 
 export async function runAgentExportWorkflow(options = {}) {
-  options = { ...options };
+  options = normalizePatientScopeOptions(options);
   if (options.categories?.length) options.categories = normalizeSyncCategories(options.categories);
   if (options.category) {
     options.category = String(options.category).trim().toLowerCase();
