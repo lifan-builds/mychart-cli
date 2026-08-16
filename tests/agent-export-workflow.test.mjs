@@ -23,6 +23,30 @@ test('createPullStateScopeKey scopes by patient, sync categories, export categor
   );
 });
 
+test('createPullStateScopeKey derives a normalized required patient without overriding explicit filters', () => {
+  const base = {
+    requireActivePatient: '  Demo\tChild  ',
+    categories: ['visits'],
+  };
+  assert.equal(
+    createPullStateScopeKey(base),
+    'patientKey=|patientLabel=Demo Child|categories=visits|category=|query=',
+  );
+  assert.equal(
+    createPullStateScopeKey({ ...base, patient: ' Other ' }),
+    'patientKey=|patientLabel=Other|categories=visits|category=|query=',
+  );
+  assert.equal(
+    createPullStateScopeKey({
+      ...base,
+      patient: ' ',
+      patientLabelExact: '\n',
+      patientKey: '\t',
+    }),
+    'patientKey=|patientLabel=Demo Child|categories=visits|category=|query=',
+  );
+});
+
 test('resolveSinceLastPullRange prefers saved state and keeps the start date inclusive', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'mychart-pull-state-'));
   const statePath = path.join(dir, '.last-pull-state.json');
@@ -218,4 +242,116 @@ test('runAgentExportWorkflow writes export and returns safe machine-readable sum
   assert.deepEqual(lines.map((line) => line.type), ['manifest', 'record', 'record', 'chunk', 'chunk']);
 
   await assert.rejects(() => readFile(pullStatePath, 'utf8'), /ENOENT/);
+});
+
+test('runAgentExportWorkflow implicitly scopes mixed-patient exports and pull-state dates', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'mychart-agent-implicit-patient-'));
+  const storePath = path.join(dir, 'store.json');
+  const outputDir = path.join(dir, 'exports');
+  const pullStatePath = path.join(outputDir, '.last-pull-state.json');
+  await mkdir(path.dirname(storePath), { recursive: true });
+
+  const records = [
+    {
+      id: 'demo-visit',
+      patient: { key: 'demo-child', label: 'Demo Child' },
+      category: 'visits',
+      recordType: 'visit-note',
+      title: 'Demo visit',
+      date: '2026-06-09',
+      clinicalText: 'Assessment and Plan\nContinue support.',
+    },
+    {
+      id: 'demo-result',
+      patient: { key: 'demo-child', label: 'Demo Child' },
+      category: 'test-results',
+      recordType: 'test-result',
+      title: 'Demo result',
+      date: '2026-06-10',
+      rawText: 'Your value is 7.2 K/uL',
+    },
+    {
+      id: 'other-visit',
+      patient: { key: 'other', label: 'Other' },
+      category: 'visits',
+      recordType: 'visit-note',
+      title: 'Other visit',
+      date: '2026-06-30',
+      clinicalText: 'Assessment and Plan\nOther patient text.',
+    },
+  ];
+  await writeFile(storePath, `${JSON.stringify({
+    version: 1,
+    records,
+    indexCards: records.map(({ id, patient, category, recordType, title, date }) => ({
+      id,
+      patient,
+      category,
+      recordType,
+      title,
+      date,
+    })),
+    syncMetadata: { lastDeepSyncAt: '2026-06-10T10:00:00.000Z' },
+  }, null, 2)}\n`, 'utf8');
+
+  const stateKey = createPullStateScopeKey({
+    patientLabelExact: 'Demo Child',
+    categories: ['visits', 'test-results'],
+  });
+  await mkdir(outputDir, { recursive: true });
+  await writeFile(pullStatePath, `${JSON.stringify({
+    version: 1,
+    scopes: {
+      [stateKey]: { lastClinicalDate: '2026-06-09' },
+    },
+  }, null, 2)}\n`, 'utf8');
+
+  const summary = await runAgentExportWorkflow({
+    storePath,
+    outputDir,
+    pullStatePath,
+    sinceLastPull: true,
+    requireActivePatient: '  Demo\tChild  ',
+    patient: ' ',
+    patientLabelExact: '\n',
+    patientKey: '\t',
+    categories: ['visits', 'test-results'],
+    days: 2,
+    format: 'jsonl',
+    generatedAt: '2026-06-10T12:00:00.000Z',
+  });
+
+  assert.equal(summary.recordCount, 2);
+  assert.equal(summary.latestClinicalDate, '2026-06-10');
+  assert.equal(summary.dateRange.startDate, '2026-06-09');
+  assert.equal(summary.dateRange.endDate, '2026-06-10');
+  assert.equal(summary.filters.hasPatientFilter, true);
+  assert.equal(summary.stored.recordCount, 3);
+  assert.equal(summary.stored.totalMatchingCount, 2);
+  assert.equal(summary.pullState.updated, false);
+  assert.equal(summary.pullState.reason, 'freshness-unsafe');
+  assert.equal(JSON.stringify(summary).includes('Demo Child'), false);
+
+  const lines = (await readFile(summary.outputPath, 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  assert.deepEqual(
+    lines.filter((line) => line.type === 'record').map((line) => line.recordId),
+    ['demo-result', 'demo-visit'],
+  );
+
+  const explicitSummary = await runAgentExportWorkflow({
+    storePath,
+    outputDir,
+    outputPath: path.join(outputDir, 'explicit-patient.jsonl'),
+    all: true,
+    requireActivePatient: 'Demo Child',
+    patient: 'Other',
+    categories: ['visits'],
+    format: 'jsonl',
+    generatedAt: '2026-06-10T12:00:00.000Z',
+  });
+  assert.equal(explicitSummary.recordCount, 1);
+  assert.equal(explicitSummary.filters.hasPatientFilter, true);
 });

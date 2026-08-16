@@ -70,3 +70,24 @@ Validated and merged the Trellis 0.6.14 generated runtime upgrade in mychart-cli
 ### Status
 
 [OK] **Completed**
+
+
+## Session 3: Scope exports to required active patient
+
+**Date**: 2026-08-16
+**Task**: Scope exports to required active patient
+**Branch**: `codex/scope-exports-required-active-patient`
+
+### Summary
+
+Derived exact stored-export and pull-state scoping from the required active patient when no explicit patient filter is present; documented category-scoped freshness; added mixed-patient regression coverage; reverted the mistaken downstream Baby workaround.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2b40459` | (see git log) |
+
+### Status
+
+[OK] **Completed**

@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/mychart-cli/privacy-and-data.md", "reason": "Preserve safe summaries and keep labels/private records out of tracked artifacts."}
+{"file": ".trellis/spec/mychart-cli/browser-boundary.md", "reason": "Prohibits live browser/portal validation for this deterministic workflow change."}
+{"file": ".trellis/spec/mychart-cli/verification.md", "reason": "Defines npm test and check:release as native deterministic checks."}

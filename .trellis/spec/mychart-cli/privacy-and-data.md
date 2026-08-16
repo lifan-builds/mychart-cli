@@ -86,3 +86,80 @@ await chmod(path.dirname(userOutputPath), 0o700);
 const { storePath } = resolveMyChartPaths();
 await writePrivateFile(userOutputPath, content);
 ```
+
+## Scenario: Required active patient scopes stored exports
+
+### 1. Scope / Trigger
+
+- Trigger: `export` receives `--require-active-patient TEXT` and reads a local
+  store that can contain records for more than one chart owner.
+
+### 2. Signatures
+
+- CLI: `mychart-cli export jsonl|markdown --require-active-patient TEXT`.
+- Optional explicit export filters: `--patient`, `--patient-label-exact`, and
+  `--patient-key`.
+- Core: `runAgentExportWorkflow(options)` and
+  `createPullStateScopeKey(options)`.
+
+### 3. Contracts
+
+- Normalize whitespace in all patient filters and the required active label.
+- If no non-empty explicit patient filter exists, derive
+  `patientLabelExact` from `requireActivePatient` before stored-record
+  filtering, clinical date selection, safe-summary creation, and pull-state
+  key construction.
+- A non-empty explicit patient filter remains authoritative; blank filter
+  values do not suppress derivation.
+- For patient scope, safe summaries expose only `hasPatientFilter`; they never
+  expose the derived or explicit label.
+- Freshness applies only to the exact requested category set and supported
+  portal surfaces, not to messages, general documents, or unrequested areas.
+
+### 4. Validation & Error Matrix
+
+- Required active label plus no explicit patient filter -> derive an exact
+  label filter.
+- Required active label plus blank explicit filters -> derive the exact label
+  filter.
+- Required active label plus a non-empty explicit filter -> preserve the
+  explicit filter.
+- No required active label -> preserve existing explicit-filter or unfiltered
+  behavior.
+
+### 5. Good/Base/Bad Cases
+
+- Good: a mixed synthetic store exports only `Demo Child` when
+  `requireActivePatient` is `Demo Child` and no patient filter is supplied.
+- Base: an explicit `patientKey` continues to select its intended records.
+- Bad: validate the live chart owner but compute the export date window from
+  every patient in the shared store.
+
+### 6. Tests Required
+
+- Use a synthetic mixed-patient store; assert record count, latest clinical
+  date, date range, and pull-state key are scoped to the required patient.
+- Assert blank explicit filters still derive the exact label.
+- Assert a non-empty explicit filter is preserved.
+- Assert serialized safe summaries contain neither the synthetic label nor
+  record text and report `hasPatientFilter: true`.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```js
+await assertActivePatientContext(page, options.requireActivePatient);
+const filtered = filterRecordCards({ cards, records });
+```
+
+#### Correct
+
+```js
+const scoped = normalizePatientScopeOptions(options);
+const filtered = filterRecordCards({
+  cards,
+  records,
+  patientLabelExact: scoped.patientLabelExact,
+});
+```
