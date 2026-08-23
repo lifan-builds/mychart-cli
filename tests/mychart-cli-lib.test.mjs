@@ -11,18 +11,26 @@ import {
   exportLatestDay,
   exportRecordsMarkdown,
   filterRecordCards,
-  inspectMyChartLoginState,
+} from '../src/core/record-exports.js';
+import {
   getMyChartCredentialsFromEnv,
+  loadEnvironmentFile,
+} from '../src/core/env.js';
+import {
   getLatestClinicalDateFromCards,
   getRecentClinicalDateRange,
-  isTransientBrowserFrameError,
-  loadEnvironmentFile,
   normalizeClinicalDateForRange,
+} from '../src/core/clinical-dates.js';
+import { inspectMyChartLoginState } from '../src/browser/sync-runner.js';
+import {
+  isTransientBrowserFrameError,
+  syncRecords,
+} from '../src/browser/sync-api.js';
+import {
   openMyChartAccessLoginIfNeeded,
   switchMyChartProxyContext,
-  syncRecords,
   waitForMyChartCredentialFields,
-} from '../scripts/mychart-cli-lib.mjs';
+} from '../src/browser/mychart-auth.js';
 
 test('getRecentClinicalDateRange creates an inclusive recent clinical window', () => {
   assert.deepEqual(
