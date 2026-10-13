@@ -40,11 +40,11 @@ function usage() {
   mychart-cli browser check
   mychart-cli browser validate
   mychart-cli browser ensure [--headless|--visible] [--validate] [--wait] [--timeout-seconds N] [--profile PATH] [--data-dir PATH] [--url URL]
-  mychart-cli sync [--login] [--categories visits,test-results] [--require-active-patient TEXT] [--exhaustive] [--max-broad-pages N] [--seed-url URL] [--force] [--max-pages N] [--max-records N] [--switch-patient TEXT]
-  mychart-cli records list [--patient-label-exact TEXT] [--category TEXT] [--query TEXT] [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--json] [--store PATH] [--data-dir PATH]
+  mychart-cli sync [--login] [--categories visits,test-results,imaging] [--require-active-patient TEXT] [--exhaustive] [--max-broad-pages N] [--seed-url URL] [--force] [--max-pages N] [--max-records N] [--switch-patient TEXT]
+  mychart-cli records list [--patient-label-exact TEXT] [--source-host HOST] [--category TEXT] [--query TEXT] [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--json] [--store PATH] [--data-dir PATH]
   mychart-cli records show --id ID [--json] [--store PATH] [--data-dir PATH]
-  mychart-cli export markdown [--sync] [--latest-day|--since-last-pull --pull-state PATH|--days N|--start-date YYYY-MM-DD --end-date YYYY-MM-DD|--all] [--output PATH|--output-dir PATH] [--json-summary] [--store PATH] [--data-dir PATH]
-  mychart-cli export jsonl [--sync] [--latest-day|--since-last-pull --pull-state PATH|--days N|--start-date YYYY-MM-DD --end-date YYYY-MM-DD|--all] [--output PATH|--output-dir PATH] [--json-summary] [--store PATH] [--data-dir PATH]
+  mychart-cli export markdown [--sync] [--latest-day|--since-last-pull --pull-state PATH|--days N|--start-date YYYY-MM-DD --end-date YYYY-MM-DD|--all] [--patient-label-exact TEXT] [--source-host HOST] [--output PATH|--output-dir PATH] [--json-summary] [--store PATH] [--data-dir PATH]
+  mychart-cli export jsonl [--sync] [--latest-day|--since-last-pull --pull-state PATH|--days N|--start-date YYYY-MM-DD --end-date YYYY-MM-DD|--all] [--patient-label-exact TEXT] [--source-host HOST] [--output PATH|--output-dir PATH] [--json-summary] [--store PATH] [--data-dir PATH]
   mychart-cli export inspect FILE [--json]
 `;
 }
@@ -84,6 +84,7 @@ function parseOptions(argv) {
     else if (arg === '--patient') options.patient = next();
     else if (arg === '--patient-label-exact') options.patientLabelExact = next();
     else if (arg === '--patient-key') options.patientKey = next();
+    else if (arg === '--source-host') options.sourceHost = next();
     else if (arg === '--category') options.category = next();
     else if (arg === '--query') options.query = next();
     else if (arg === '--start-date') options.startDate = next();
@@ -317,6 +318,7 @@ async function getFilteredRecords(options) {
     patient: options.patient,
     patientLabelExact: options.patientLabelExact,
     patientKey: options.patientKey,
+    sourceHost: options.sourceHost,
     category: options.category,
     query: options.query,
   });

@@ -12,6 +12,8 @@ const origin = 'https://mychart.example.test';
 
 for (const [name, href, category, expected] of [
   ['modern result', `${origin}/mychart/app/test-results/details?eorderid=1`, 'test-results', 'strict'],
+  ['imaging result', `${origin}/mychart/app/test-results/details?eorderid=1`, 'imaging', 'strict'],
+  ['imaging unknown', `${origin}/mychart/radiology/report?resultid=1`, 'imaging', 'exhaustive'],
   ['legacy component', `${origin}/mychart/Clinical/TestResults?component=1`, 'test-results', 'strict'],
   ['visit note', `${origin}/mychart/app/visits/note?csn=1&noteid=2`, 'visits', 'strict'],
   ['trend', `${origin}/mychart/app/test-results/past-result-details?component=1`, 'test-results', 'rejected'],
@@ -54,6 +56,6 @@ test('canonical identity ignores query order, fragments, and presentation parame
 });
 
 test('category normalization is stable and rejects unsupported values', () => {
-  assert.deepEqual(normalizeSyncCategories([' Test-Results ', 'visits', 'VISITS']), ['test-results', 'visits']);
+  assert.deepEqual(normalizeSyncCategories([' Test-Results ', 'visits', 'VISITS', 'imaging']), ['imaging', 'test-results', 'visits']);
   assert.throws(() => normalizeSyncCategories(['billing']), /Unsupported/);
 });

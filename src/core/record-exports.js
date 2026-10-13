@@ -55,6 +55,20 @@ export async function readStoredRecords({
   return { cards, records, syncMetadata };
 }
 
+export function normalizeSourceHost(value = '') {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return '';
+  try {
+    return new URL(raw.includes('://') ? raw : `https://${raw}`).host;
+  } catch {
+    return raw.replace(/^\/\//, '').split('/')[0];
+  }
+}
+
+function getSourceHost(card = {}, record = {}) {
+  return normalizeSourceHost(card.sourceUrl || record.sourceUrl || '');
+}
+
 export async function exportRecordsMarkdown({
   cards = [],
   records = [],
@@ -81,6 +95,7 @@ export function filterRecordCards({
   patient = '',
   patientLabelExact = '',
   patientKey = '',
+  sourceHost = '',
   category = '',
   categories = [],
   query = '',
@@ -89,6 +104,13 @@ export function filterRecordCards({
     ? records
     : new Map(records.map((record) => [record.id, record]));
   let filteredCards = cards.filter((card) => recordsById.has(card.id));
+  const expectedSourceHost = normalizeSourceHost(sourceHost);
+
+  if (expectedSourceHost) {
+    filteredCards = filteredCards.filter((card) => (
+      getSourceHost(card, recordsById.get(card.id)) === expectedSourceHost
+    ));
+  }
 
   if (patient) {
     const needle = String(patient).toLowerCase();
@@ -195,6 +217,7 @@ export function exportLatestDay({
   patient = '',
   patientLabelExact = '',
   patientKey = '',
+  sourceHost = '',
   categories,
   category = '',
   query = '',
@@ -216,6 +239,7 @@ export function exportLatestDay({
     patient,
     patientLabelExact,
     patientKey,
+    sourceHost,
     category,
     query,
   });

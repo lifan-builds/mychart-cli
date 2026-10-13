@@ -1,4 +1,5 @@
 export function isPriorityDetailLink(link, category) {
+    if (category === 'imaging') category = 'test-results';
     const href = String(link?.href || '');
     if (!href) return false;
 

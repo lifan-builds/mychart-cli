@@ -194,9 +194,13 @@ export class JsonMedicalStore {
       normalizeIndexCard: (card) => this.normalizeIndexCard(card),
       createIndexCard: (record) => this.createIndexCard(record),
     });
+    const invalidStoredRecordIds = new Set(getInvalidStoredVisitShellIds(store.records));
+    const replacedRecordIds = new Set(sourceUrl
+      ? getIdsToReplaceForSource(store.records, normalizedRecords, sourceUrl)
+      : []);
     const recordIdsToDelete = new Set([
-      ...getInvalidStoredVisitShellIds(store.records),
-      ...(sourceUrl ? getIdsToReplaceForSource(store.records, normalizedRecords, sourceUrl) : []),
+      ...invalidStoredRecordIds,
+      ...replacedRecordIds,
     ]);
     const indexIdsToDelete = new Set([
       ...getInvalidStoredVisitShellIds(store.indexCards),
@@ -224,6 +228,14 @@ export class JsonMedicalStore {
     normalizedIndexCards.forEach((card) => indexById.set(card.id, card));
     store.records = [...recordsById.values()];
     store.indexCards = [...indexById.values()];
+    const normalizedRecordIds = new Set(normalizedRecords.map((record) => record.id));
+    const deletedRecordIds = [...recordIdsToDelete].filter((id) => !normalizedRecordIds.has(id));
+    const deletionReasons = deletedRecordIds.reduce((reasons, id) => {
+      if (invalidStoredRecordIds.has(id)) reasons.invalidShell += 1;
+      else if (replacedRecordIds.has(id)) reasons.replacedSource += 1;
+      else reasons.other += 1;
+      return reasons;
+    }, { invalidShell: 0, replacedSource: 0, other: 0 });
     return {
       recordCount: normalizedRecords.length,
       indexCount: normalizedIndexCards.length,
@@ -232,8 +244,9 @@ export class JsonMedicalStore {
         inserted,
         updated,
         unchanged,
-        deleted: [...recordIdsToDelete].filter((id) => !normalizedRecords.some((record) => record.id === id)).length,
+        deleted: deletedRecordIds.length,
       },
+      deletionReasons,
     };
   }
 

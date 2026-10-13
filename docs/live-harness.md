@@ -17,6 +17,10 @@ Headless harness:
 mychart-cli browser start --headless
 ```
 
+Headless startup uses the TCP CDP endpoint because recent macOS Chrome builds
+can close the remote-debugging pipe during startup. Visible interactive
+sessions keep the pipe transport for better input behavior.
+
 Readiness and auth checks:
 
 ```bash

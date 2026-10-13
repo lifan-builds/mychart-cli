@@ -10,7 +10,7 @@ const PRESENTATION_KEYS = new Set([
 ]);
 
 export function normalizeSyncCategories(categories = []) {
-  const supported = new Set(['visits', 'test-results', 'medications', 'letters', 'health-summary']);
+  const supported = new Set(['visits', 'test-results', 'imaging', 'medications', 'letters', 'health-summary']);
   const normalized = [...new Set((categories || [])
     .flatMap((value) => String(value || '').split(','))
     .map((value) => value.trim().toLowerCase())
@@ -53,7 +53,8 @@ export function classifySyncLink(link = {}, {
     || /terms|privacy|language|non-discrimination|accessibility/.test(text)) {
     return { routeClass: 'static-content', admission: 'rejected', reason: 'static_content' };
   }
-  if (isPriorityDetailLink({ ...link, href: url.href }, category)) {
+  const routeCategory = category === 'imaging' ? 'test-results' : category;
+  if (isPriorityDetailLink({ ...link, href: url.href }, routeCategory)) {
     return {
       routeClass: category === 'visits' ? 'visit-detail' : 'result-detail',
       admission: 'strict',
@@ -62,8 +63,8 @@ export function classifySyncLink(link = {}, {
   }
   const keys = [...url.searchParams.keys()].map((key) => key.toLowerCase());
   const hasClinicalId = keys.some((key) => CLINICAL_ID_KEYS.has(key));
-  const clinicalFamily = category === 'test-results'
-    ? /test|result|clinical/.test(path)
+  const clinicalFamily = category === 'test-results' || category === 'imaging'
+    ? /test|result|clinical|imaging|radiology|x-?ray/.test(path)
     : category === 'visits' ? /visit|note|clinical/.test(path) : false;
   if (hasClinicalId && clinicalFamily) {
     return { routeClass: 'unknown-clinical', admission: 'exhaustive', reason: 'credible_unrecognized_clinical_route' };

@@ -6,14 +6,14 @@ import { extractPdfText } from '../core/pdf-text.js';
 import { ensurePrivateDirectory, writePrivateFile } from '../core/private-files.js';
 
 export function isExternalScanExtraction(extraction = {}) {
-  const text = [
+  const textSources = [
     extraction.page?.title,
     extraction.page?.bodyText,
     ...(extraction.records || []).flatMap((record) => [record.title, record.summary, record.rawText]),
-  ].filter(Boolean).join('\n');
+  ].filter(Boolean);
   return extraction.page?.category === 'test-results'
-    && /\bexternal\s+scan\b/i.test(text)
-    && /\bscan\s+\d+\b/i.test(text);
+    && textSources.some((text) => /\bexternal\s+scan\b/i.test(text))
+    && textSources.some((text) => /\bscan\s+\d+\b/i.test(text));
 }
 
 export async function enrichExternalScanAttachments(page, extraction = {}, {

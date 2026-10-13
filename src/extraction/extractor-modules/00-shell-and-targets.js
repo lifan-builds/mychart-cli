@@ -52,6 +52,12 @@
     function detectCategoryFromUrl(url) {
         const path = String(url || '').toLowerCase();
         if (/\b(?:imaging|radiology|xray|x-ray|radiologyresult|diagnosticimaging)\b/i.test(path)) return 'imaging';
+        try {
+            const parsed = new URL(url || DEFAULT_MYCHART_HOME_URL, DEFAULT_MYCHART_HOME_URL);
+            if (/^(?:imaging|radiology|xray|x-ray)$/i.test(parsed.searchParams.get('category') || '')) return 'imaging';
+        } catch (error) {
+            // Keep path-based classification when the URL is unavailable.
+        }
         if (path.includes('test-results') || path.includes('testresults')) return 'test-results';
         if (path.includes('medication')) return 'medications';
         if (path.includes('visit')) return 'visits';

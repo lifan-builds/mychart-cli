@@ -23,6 +23,11 @@ import { enrichExternalScanAttachments } from './document-attachments.js';
 
 const require = createRequire(import.meta.url);
 const { buildExtractorInjectionSource } = require('../extraction/extractor-core.js');
+const EXTRACTOR_SOURCE = buildExtractorInjectionSource();
+
+const MAX_VISIT_NOTE_FRAMES = 8;
+const VISIT_FRAME_SIGNAL = /(?:visit|note|clinical|report|result|document)/i;
+const VISIT_FRAME_NOISE = /(?:keepalive|heartbeat|authentication|login|captcha|recaptcha|analytics|telemetry)/i;
 
 export async function readLiveHarnessSession({
   profileDir = DEFAULT_LIVE_PROFILE_DIR,
@@ -153,18 +158,27 @@ export async function inspectMyChartLoginState(page) {
 }
 
 export async function extractPage(page) {
-  const source = buildExtractorInjectionSource();
-  const extraction = await page.evaluate((extractorSource) => {
-    if (!globalThis.MyChartExtractorCore) {
-      Function(extractorSource)();
-    }
-    return globalThis.MyChartExtractorCore.extractRecordsFromDocument(document, location);
-  }, source);
+  await ensureExtractorInstalled(page);
+  const { extraction, noteHeader } = await page.evaluate(() => {
+    const result = globalThis.MyChartExtractorCore.extractRecordsFromDocument(document, location);
+    if (result?.page?.category !== 'visits') return { extraction: result, noteHeader: '' };
+    const lines = (document.body?.innerText || '')
+      .split(/\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const start = lines.findIndex((line) => /^Notes from Care Team$/i.test(line));
+    const headerLines = (start >= 0 ? lines.slice(start, start + 10) : lines.slice(0, 10))
+      .filter((line) => (
+        /^Notes from Care Team$/i.test(line)
+        || /\b(?:Daily Progress Note|Consulting Provider Notes?|Progress Notes?|Provider Notes?|Procedure Notes?|Plan of Care|Lactation Note|History and Physical|H&P)\b/i.test(line)
+        || /^Signed\s+/i.test(line)
+        || /^Filed\s+/i.test(line)
+      ));
+    return { extraction: result, noteHeader: headerLines.join('\n').trim() };
+  });
   if (extraction?.page?.category !== 'visits') return extraction;
 
-  const noteHeader = await extractTopVisitNoteHeader(page).catch(() => '');
   const frameExtractions = await extractVisitFrames(page, {
-    extractorSource: source,
     sourceUrl: extraction.page?.sourceUrl || page.url(),
     patient: extraction.page?.patient || null,
     noteHeader,
@@ -178,37 +192,32 @@ export async function extractPage(page) {
   });
 }
 
-async function extractTopVisitNoteHeader(page) {
-  return page.evaluate(() => {
-    const lines = (document.body?.innerText || '')
-      .split(/\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
-    const start = lines.findIndex((line) => /^Notes from Care Team$/i.test(line));
-    const headerLines = (start >= 0 ? lines.slice(start, start + 10) : lines.slice(0, 10))
-      .filter((line) => (
-        /^Notes from Care Team$/i.test(line)
-        || /\b(?:Daily Progress Note|Consulting Provider Notes?|Progress Notes?|Provider Notes?|Procedure Notes?|Plan of Care|Lactation Note|History and Physical|H&P)\b/i.test(line)
-        || /^Signed\s+/i.test(line)
-        || /^Filed\s+/i.test(line)
-      ));
-    return headerLines.join('\n').trim();
-  });
+async function ensureExtractorInstalled(page) {
+  const installed = await page.evaluate(() => Boolean(globalThis.MyChartExtractorCore));
+  if (!installed) await page.evaluate((source) => Function(source)(), EXTRACTOR_SOURCE);
+}
+
+async function ensureExtractorInstalledInFrame(frame) {
+  const installed = await frame.evaluate(() => Boolean(globalThis.MyChartExtractorCore));
+  if (!installed) await frame.evaluate((source) => Function(source)(), EXTRACTOR_SOURCE);
 }
 
 async function extractVisitFrames(page, {
-  extractorSource,
   sourceUrl,
   patient,
   noteHeader = '',
 } = {}) {
-  const frames = page.frames().filter((frame) => frame !== page.mainFrame());
+  const expectedOrigin = getUrlOrigin(sourceUrl);
+  const frames = page.frames()
+    .filter((frame) => frame !== page.mainFrame())
+    .filter((frame) => shouldInspectVisitFrame(frame.url()))
+    .filter((frame) => isSameOriginFrame(frame.url(), expectedOrigin))
+    .sort((left, right) => scoreVisitFrameUrl(right.url()) - scoreVisitFrameUrl(left.url()))
+    .slice(0, MAX_VISIT_NOTE_FRAMES);
   const extractions = [];
   for (const frame of frames) {
-    const result = await frame.evaluate((source, topSourceUrl, topPatient, topNoteHeader) => {
-      if (!globalThis.MyChartExtractorCore) {
-        Function(source)();
-      }
+    await ensureExtractorInstalledInFrame(frame).catch(() => {});
+    const result = await frame.evaluate((topSourceUrl, topPatient, topNoteHeader) => {
       const collectDeepText = (rootNode) => {
         const pieces = [];
         const visit = (node) => {
@@ -230,29 +239,63 @@ async function extractVisitFrames(page, {
         visit(rootNode);
         return pieces.join('\n');
       };
-      const text = [
-        topNoteHeader,
-        document.querySelector('main, #main, [role="main"]')?.innerText,
-        document.body?.innerText,
-        document.documentElement?.innerText,
-        collectDeepText(document),
-      ].filter(Boolean).join('\n');
-      const normalizedText = globalThis.MyChartExtractorCore.normalizeText(text);
-      const records = globalThis.MyChartExtractorCore.extractMyChartRecordsFromText(normalizedText, {
-        category: 'visits',
-        sourceUrl: topSourceUrl || location.href,
-        patient: topPatient,
-      });
+      const visibleText = document.querySelector('main, #main, [role="main"]')?.innerText
+        || document.body?.innerText
+        || document.documentElement?.innerText
+        || '';
+      const parse = (text) => globalThis.MyChartExtractorCore.extractMyChartRecordsFromText(
+        globalThis.MyChartExtractorCore.normalizeText(text),
+        {
+          category: 'visits',
+          sourceUrl: topSourceUrl || location.href,
+          patient: topPatient,
+        },
+      );
+      let normalizedText = globalThis.MyChartExtractorCore.normalizeText(
+        [topNoteHeader, visibleText].filter(Boolean).join('\n'),
+      );
+      let records = parse(normalizedText);
+      if (!records.length || normalizedText.length < 1200) {
+        normalizedText = globalThis.MyChartExtractorCore.normalizeText(
+          [topNoteHeader, visibleText, collectDeepText(document)].filter(Boolean).join('\n'),
+        );
+        records = parse(normalizedText);
+      }
       return {
         frameUrl: location.href,
         textLength: normalizedText.length,
         records,
         indexCards: records.map(globalThis.MyChartExtractorCore.createIndexCard),
       };
-    }, extractorSource, sourceUrl, patient, noteHeader).catch(() => null);
+    }, sourceUrl, patient, noteHeader).catch(() => null);
     if (result?.records?.length) extractions.push(result);
   }
   return extractions;
+}
+
+export function shouldInspectVisitFrame(frameUrl = '') {
+  return !VISIT_FRAME_NOISE.test(String(frameUrl || ''));
+}
+
+function getUrlOrigin(url = '') {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return '';
+  }
+}
+
+export function isSameOriginFrame(frameUrl = '', expectedOrigin = '') {
+  if (!expectedOrigin || !frameUrl || /^about:blank$/i.test(frameUrl)) return true;
+  return getUrlOrigin(frameUrl) === expectedOrigin;
+}
+
+function scoreVisitFrameUrl(frameUrl = '') {
+  const url = String(frameUrl || '');
+  if (!shouldInspectVisitFrame(url)) return -1;
+  if (VISIT_FRAME_SIGNAL.test(url)) return 2;
+  if (!url || /^about:blank$/i.test(url)) return 1;
+  return 0;
 }
 
 function extractSignedHeaderDate(header = '') {
@@ -367,13 +410,26 @@ async function gotoWithFallback(page, target) {
   for (const url of urls) {
     try {
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-      await page.waitForNetworkIdle({ idleTime: 500, timeout: 5000 }).catch(() => {});
+      await waitForRouteReady(page, target.category);
       return url;
     } catch (error) {
       lastError = error;
     }
   }
   throw lastError || new Error(`Could not navigate to ${target.url}`);
+}
+
+async function waitForRouteReady(page, category = '') {
+  await page.waitForFunction((expectedCategory) => {
+    if (document.readyState === 'loading') return false;
+    const main = document.querySelector('main, #main, [role="main"]') || document.body;
+    const text = String(main?.innerText || '').trim();
+    if (text.length >= 120) return true;
+    if (expectedCategory === 'visits') return /(?:visit|note|care team|signed|procedure)/i.test(text);
+    if (expectedCategory === 'test-results' || expectedCategory === 'imaging') return /(?:test|result|lab|imaging|radiology|no results)/i.test(text);
+    return Boolean(text);
+  }, { timeout: 2500 }, category).catch(() => {});
+  await page.waitForNetworkIdle({ idleTime: 200, timeout: 2000 }).catch(() => {});
 }
 
 async function openVisitClinicalNotesIfPresent(page) {
@@ -388,8 +444,8 @@ async function openVisitClinicalNotesIfPresent(page) {
     return true;
   }).catch(() => false);
   if (!clicked) return false;
-  await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
-  await page.waitForNetworkIdle({ idleTime: 500, timeout: 5000 }).catch(() => {});
+  await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 5000 }).catch(() => {});
+  await waitForRouteReady(page, 'visits');
   return true;
 }
 
@@ -563,7 +619,9 @@ function markIncrementalRefreshTargets(targets = []) {
 
 function inferSyncCategoryFromUrl(url = '') {
   const value = String(url || '').toLowerCase();
+  if (/[?&]category=(?:imaging|radiology|x-ray)(?:&|$)/i.test(value)) return 'imaging';
   if (value.includes('test-results') || value.includes('testresults')) return 'test-results';
+  if (value.includes('imaging') || value.includes('radiology') || value.includes('x-ray')) return 'imaging';
   if (value.includes('visit')) return 'visits';
   if (value.includes('medication')) return 'medications';
   if (value.includes('letter')) return 'letters';
@@ -611,14 +669,23 @@ export function shouldVisitSyncTarget(target = {}, {
   return Boolean(target.refreshOnIncremental);
 }
 
+export function getSyncSkipReason(target = {}, {
+  force = false,
+  visitedUrls = {},
+} = {}) {
+  if (force) return '';
+  if ((target.priorityDetail || target.broadCandidate) && target.hasStoredRecord) return 'covered';
+  if (visitedUrls[normalizeUrlKey(target.url)] && !(target.priorityDetail || target.broadCandidate || target.refreshOnIncremental)) {
+    return 'visited';
+  }
+  return '';
+}
+
 export async function getDeepSyncTargetsFromPage(page, { categories } = {}) {
-  const source = buildExtractorInjectionSource();
-  const targets = await page.evaluate((extractorSource) => {
-    if (!globalThis.MyChartExtractorCore) {
-      Function(extractorSource)();
-    }
+  await ensureExtractorInstalled(page);
+  const targets = await page.evaluate(() => {
     return globalThis.MyChartExtractorCore.getDeepSyncTargets(location.href, document);
-  }, source);
+  });
   const categorySet = new Set((categories || []).map((item) => String(item || '').trim()).filter(Boolean));
   return targets.filter((target) => !categorySet.size || categorySet.has(target.category));
 }
@@ -713,6 +780,7 @@ export async function runPuppeteerDeepSync({
     broadPagesVisited: 0,
     recordsSaved: 0,
     recordDeltas: { inserted: 0, updated: 0, unchanged: 0, deleted: 0 },
+    deletionReasons: { invalidShell: 0, replacedSource: 0, other: 0 },
     errors: [],
     errorStages: {},
     routeCounts: {},
@@ -720,6 +788,7 @@ export async function runPuppeteerDeepSync({
     // routeCounts classifies links discovered on pages. navigatedRouteCounts is
     // separate so rejected candidates can never be mistaken for page visits.
     navigatedRouteCounts: {},
+    skippedTargets: { covered: 0, visited: 0 },
     requestedMode: exhaustive ? 'exhaustive' : 'strict',
     effectiveMode: exhaustive || missingDiscoveryCategories.length ? 'exhaustive' : 'strict',
     fallbackReason: missingDiscoveryCategories.length ? 'malformed_or_missing_discovery' : '',
@@ -764,6 +833,8 @@ export async function runPuppeteerDeepSync({
           routeCounts: status.routeCounts,
           navigatedRouteCounts: status.navigatedRouteCounts,
           recordDeltas: status.recordDeltas,
+          deletionReasons: status.deletionReasons,
+          skippedTargets: status.skippedTargets,
           broadPagesAttempted: status.broadPagesAttempted,
           broadPagesVisited: status.broadPagesVisited,
         },
@@ -798,7 +869,11 @@ export async function runPuppeteerDeepSync({
         status.completionReason = 'max_broad_pages'; status.truncated = true; break;
       }
       const key = target.canonicalKey || normalizeUrlKey(target.url);
-      if (!shouldVisitSyncTarget(target, { force, visitedUrls })) continue;
+      const skipReason = getSyncSkipReason(target, { force, visitedUrls });
+      if (skipReason) {
+        status.skippedTargets[skipReason] = (status.skippedTargets[skipReason] || 0) + 1;
+        continue;
+      }
       if (target.broadCandidate) status.broadPagesAttempted += 1;
       status.current = target.label || target.category || 'clinical target';
       onProgress({ ...status, errors: status.errors.map((error) => error.stage) });
@@ -819,6 +894,9 @@ export async function runPuppeteerDeepSync({
         if (target.broadCandidate) status.broadPagesVisited += 1;
         status.recordsSaved += saveResult.recordCount;
         for (const delta of Object.keys(status.recordDeltas)) status.recordDeltas[delta] += saveResult.deltas?.[delta] || 0;
+        for (const reason of Object.keys(status.deletionReasons)) {
+          status.deletionReasons[reason] += saveResult.deletionReasons?.[reason] || 0;
+        }
         visitedUrls[normalizeUrlKey(target.url)] = new Date().toISOString();
         if (target.priorityDetail || target.broadCandidate) canonicalCoverage[key] = new Date().toISOString();
         const linkEvidence = enqueueExtractionLinks({

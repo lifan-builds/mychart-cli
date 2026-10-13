@@ -10,8 +10,21 @@ import {
   buildPriorityDetailCoverage,
   classifyDiscoveryEvidence,
   enrichVisitNoteFromHeader,
+  getSyncSkipReason,
   shouldVisitSyncTarget,
+  shouldInspectVisitFrame,
+  isSameOriginFrame,
 } from '../src/browser/sync-runner.js';
+
+test('visit-frame filtering skips browser utility frames but keeps blank and clinical frames', () => {
+  assert.equal(shouldInspectVisitFrame('https://mychart.example.test/keepalive'), false);
+  assert.equal(shouldInspectVisitFrame('https://mychart.example.test/Authentication/Login'), false);
+  assert.equal(shouldInspectVisitFrame('about:blank'), true);
+  assert.equal(shouldInspectVisitFrame('https://mychart.example.test/app/visits/note'), true);
+  assert.equal(isSameOriginFrame('https://mychart.example.test/app/visits/note', 'https://mychart.example.test'), true);
+  assert.equal(isSameOriginFrame('https://third-party.example.test/frame', 'https://mychart.example.test'), false);
+  assert.equal(isSameOriginFrame('about:blank', 'https://mychart.example.test'), true);
+});
 
 test('discovery evidence distinguishes explicit empty/all-covered links from malformed pages', () => {
   assert.equal(classifyDiscoveryEvidence({ records: [] }, { admissibleCount: 2 }), 'classified');
@@ -78,6 +91,22 @@ test('routine sync skips already covered priority details', () => {
     }, { visitedUrls }),
     false,
   );
+});
+
+test('routine sync explains covered and visited target skips', () => {
+  assert.equal(getSyncSkipReason({
+    url: 'https://mychart.example.test/result?id=1',
+    priorityDetail: true,
+    hasStoredRecord: true,
+  }), 'covered');
+  assert.equal(getSyncSkipReason({
+    url: 'https://mychart.example.test/discovery',
+  }, { visitedUrls: { 'https://mychart.example.test/discovery': '2026-10-13T00:00:00.000Z' } }), 'visited');
+  assert.equal(getSyncSkipReason({
+    url: 'https://mychart.example.test/result?id=1',
+    priorityDetail: true,
+    hasStoredRecord: true,
+  }, { force: true }), '');
 });
 
 test('patient-scoped canonical coverage skips an equivalent unvisited URL variant', () => {
