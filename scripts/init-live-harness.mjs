@@ -62,7 +62,15 @@ export async function initLiveHarness({
   headless = false,
 } = {}) {
   const endpoint = createLiveHarnessEndpoint(debugPort);
-  const { browser, session } = await launchLiveHarness({ debugPort, mychartUrl, headless });
+  // Headless Chrome is more reliable through the TCP CDP endpoint than the
+  // remote-debugging pipe on recent macOS Chrome builds. Keep the pipe for
+  // visible interactive sessions, where it has the best input behavior.
+  const { browser, session } = await launchLiveHarness({
+    debugPort,
+    mychartUrl,
+    headless,
+    pipe: !headless,
+  });
 
   await openMyChartPage(browser, mychartUrl);
 

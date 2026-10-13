@@ -40,6 +40,22 @@ test('write session batches page merges into bounded atomic checkpoints', async 
   assert.equal((await store.getAllRecords()).length, 2);
 });
 
+test('merge reports source replacement deletions separately from record deltas', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'mychart-deletion-reasons-'));
+  const store = new JsonMedicalStore({ storePath: path.join(dir, 'store.json') });
+  const sourceUrl = 'https://example.test/details?id=replace-me';
+  await store.saveExtractedPage({
+    page: { sourceUrl, category: 'test-results' },
+    records: [{ id: 'old-record', category: 'test-results', recordType: 'test-result', title: 'Old', date: '2026-07-12', rawText: 'old', sourceUrl }],
+  });
+  const result = await store.saveExtractedPage({
+    page: { sourceUrl, category: 'test-results' },
+    records: [{ id: 'new-record', category: 'test-results', recordType: 'test-result', title: 'New', date: '2026-07-12', rawText: 'new', sourceUrl }],
+  });
+  assert.equal(result.deltas.deleted, 1);
+  assert.deepEqual(result.deletionReasons, { invalidShell: 0, replacedSource: 1, other: 0 });
+});
+
 test('failed later checkpoint leaves the last atomic generation readable', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'mychart-checkpoint-recovery-'));
   const storePath = path.join(dir, 'store.json');

@@ -78,7 +78,9 @@
         ]);
         const sourceTexts = collectUniqueText([
             collectDeepText(scope),
-            collectDeepText(documentRef),
+            ...(scope === documentRef?.body || scope === documentRef?.documentElement
+                ? []
+                : [collectDeepText(documentRef)]),
             ...visibleTexts,
             scope?.textContent,
             documentRef?.body?.textContent,
@@ -207,14 +209,15 @@
             'h1, h2, h3, [role="heading"]',
             'main, #main, [role="main"]',
         ];
-        const candidateTexts = scopedSelectors.flatMap((selector) => (
-            [...documentRef.querySelectorAll(selector)]
-                .map((element) => (
-                    element.getAttribute('aria-label')
-                    || element.getAttribute('title')
-                    || element.innerText
-                    || ''
-                ))
+        const candidateElements = new Set();
+        for (const selector of scopedSelectors) {
+            for (const element of documentRef.querySelectorAll(selector)) candidateElements.add(element);
+        }
+        const candidateTexts = [...candidateElements].map((element) => (
+            element.getAttribute('aria-label')
+            || element.getAttribute('title')
+            || element.innerText
+            || ''
         ));
         candidateTexts.push(documentRef.title || '');
         candidateTexts.push(documentRef.body?.innerText || '');
@@ -280,12 +283,12 @@
         documentRef,
         candidates,
     }) {
-        if (category === 'test-results' && isTestResultDetailPage(sourceUrl)
+        if ((category === 'test-results' || category === 'imaging') && isTestResultDetailPage(sourceUrl)
             && looksLikeRecordBlock(mainText, category)) {
             return [mainText];
         }
 
-        if (category === 'test-results') {
+        if (category === 'test-results' || category === 'imaging') {
             const linkedBlocks = extractLinkedTestResultBlocks(main);
             if (linkedBlocks.length) return linkedBlocks;
         }
@@ -320,7 +323,10 @@
             };
         }
         const main = documentRef.querySelector('main, #main, [role="main"]') || documentRef.body;
-        const mainText = normalizeText(main.innerText || main.textContent || '');
+        const bodyText = normalizeText(documentRef.body?.innerText || '');
+        const mainText = main === documentRef.body && bodyText
+            ? bodyText
+            : normalizeText(main.innerText || main.textContent || '');
         const candidates = [
             ...main.querySelectorAll(
                 [
@@ -363,14 +369,14 @@
                 sourceUrl,
                 debug: {
                     mainTextLength: mainText.length,
-                    bodyTextLength: normalizeText(documentRef.body?.innerText || '').length,
+                    bodyTextLength: bodyText.length,
                     candidateCount: candidates.length,
                     blockCount: sourceBlocks.length,
                     visitNoteBlockCount: category === 'visits' ? sourceBlocks.length : 0,
                     sourceBlockCount: sourceBlocks.length,
                     explicitEmptyState: /\b(?:no|don't have any|do not have any)\s+(?:(?:new|upcoming|past)\s+)?(?:test\s+results?|results?|visits?|appointments?|records?)\b/i.test(mainText),
                     bodyLooksLikeVisitNote: looksLikeVisitNoteText(
-                        normalizeText(documentRef.body?.innerText || ''),
+                        bodyText,
                         'visits',
                     ),
                     firstSourceBlock: summarizeVisitNoteBlockForDebug(

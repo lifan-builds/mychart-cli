@@ -110,6 +110,26 @@ test('detectCategoryFromUrl maps Alternate MyChart MyChart clinical routes', () 
     detectCategoryFromUrl('https://mychart.example.org/mychart/app/radiology/results/123'),
     'imaging',
   );
+  assert.equal(
+    detectCategoryFromUrl('https://mychart.example.org/mychart/app/test-results?category=imaging'),
+    'imaging',
+  );
+});
+
+test('extractMyChartRecordsFromText keeps imaging records in the imaging category', () => {
+  const records = extractMyChartRecordsFromText(`
+    Chest X-Ray
+    Apr 12, 2026
+    Findings: Mild peribronchial thickening.
+    Impression: No focal pneumonia.
+  `, {
+    category: 'imaging',
+    sourceUrl: 'https://mychart.example.org/mychart/app/test-results?category=imaging',
+  });
+
+  assert.equal(records.length, 1);
+  assert.equal(records[0].category, 'imaging');
+  assert.equal(records[0].recordType, 'imaging-report');
 });
 
 test('normalizeText collapses whitespace without losing line boundaries', () => {

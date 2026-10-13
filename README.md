@@ -79,6 +79,9 @@ mychart-cli sync \
   --require-active-patient "Demo Child"
 ```
 
+Use `--categories imaging` when the portal exposes radiology results through
+the imaging view.
+
 Use the exact chart-owner label shown by MyChart for
 `--require-active-patient`. This validation happens before the store changes.
 When an export also receives this option, it implicitly applies the same exact
@@ -91,6 +94,8 @@ so shared stored records and `--since-last-pull` state remain patient-scoped.
 ```bash
 mychart-cli records list --category test-results
 mychart-cli export jsonl --latest-day --output ./mychart.jsonl
+mychart-cli export jsonl --all --patient-label-exact "Felix" \
+  --source-host mychart.seattlechildrens.org --output ./felix-sch.jsonl
 mychart-cli export markdown --latest-day --output ./mychart.md
 mychart-cli export inspect ./mychart.jsonl
 ```
@@ -100,13 +105,17 @@ record metadata and deterministic text chunks. Markdown is intended for human
 review. Both formats can contain sensitive medical information.
 
 `--json-summary` prints metadata such as counts, date range, completion state,
-and category totals. It omits patient names, clinical titles, raw portal text,
-queries, and source hosts.
+category totals, covered-route skips, and storage replacement reasons. It omits
+patient names, clinical titles, raw portal text, queries, and source hosts.
 
 Freshness and completion claims apply only to the categories and portal
 surfaces requested for that sync. A safe `visits,test-results` sync does not
 establish coverage of messages, general documents, or other unrequested portal
 surfaces.
+
+Patient labels can be shared across portals in one local store. Use
+`--source-host` when a patient label such as `Felix` must stay restricted to a
+specific MyChart origin; the host is included in incremental pull-state scope.
 
 ## What stays local
 
@@ -140,6 +149,20 @@ records.
 npm test
 npm run check:release
 ```
+
+Optional REA analysis stays local and source-only by default:
+
+The Codex-managed REA runtime is shared from `/Users/lfan/.agents/rea`, so
+trusted projects can use the same installation through their project wrapper.
+
+```bash
+npm run rea:fixture
+npm run rea -- analyze-javascript-application .tools/rea-fixture \
+  --artifact-format directory --json
+```
+
+See [docs/rea-mychart.md](docs/rea-mychart.md) for the privacy boundary and
+the read-only workflow for investigating portal request shapes.
 
 The test suite uses synthetic fixtures. Release checks must never launch a live
 portal, read an authenticated browser profile, or inspect a local record store.

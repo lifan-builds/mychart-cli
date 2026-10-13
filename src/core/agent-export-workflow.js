@@ -18,6 +18,7 @@ import {
   buildRecordsAgentJsonlExport,
   buildRecordsMarkdownExport,
   filterRecordCards,
+  normalizeSourceHost,
   readStoredRecords,
   writeRecordsAgentJsonlExport,
   writeRecordsMarkdownExport,
@@ -47,11 +48,13 @@ function normalizePatientScopeOptions(options = {}) {
   const patient = normalizePatientFilterValue(options.patient);
   const patientLabelExact = normalizePatientFilterValue(options.patientLabelExact);
   const patientKey = normalizePatientFilterValue(options.patientKey);
+  const sourceHost = normalizeSourceHost(options.sourceHost);
   const requireActivePatient = normalizePatientFilterValue(options.requireActivePatient);
 
   normalized.patient = patient;
   normalized.patientLabelExact = patientLabelExact;
   normalized.patientKey = patientKey;
+  normalized.sourceHost = sourceHost;
   normalized.requireActivePatient = requireActivePatient;
 
   if (!patient && !patientLabelExact && !patientKey && requireActivePatient) {
@@ -69,6 +72,7 @@ export function createPullStateScopeKey(options = {}) {
   return [
     `patientKey=${normalizedOptions.patientKey || ''}`,
     `patientLabel=${normalizedOptions.patientLabelExact || normalizedOptions.patient || ''}`,
+    `sourceHost=${normalizedOptions.sourceHost || ''}`,
     ...(normalizedOptions._contextScope ? [`contextScope=${normalizedOptions._contextScope}`] : []),
     `categories=${categoryScope}`,
     `category=${normalizedOptions.category || ''}`,
@@ -77,7 +81,12 @@ export function createPullStateScopeKey(options = {}) {
 }
 
 function normalizeLegacyPullStateKey(key = '') {
-  return String(key).split('|').map((part) => {
+  const parts = String(key).split('|');
+  if (!parts.some((part) => part.startsWith('sourceHost='))) {
+    const patientIndex = parts.findIndex((part) => part.startsWith('patientLabel='));
+    parts.splice(patientIndex >= 0 ? patientIndex + 1 : 2, 0, 'sourceHost=');
+  }
+  return parts.map((part) => {
     if (!part.startsWith('categories=')) return part;
     const categories = part.slice('categories='.length).split(',').map((item) => item.trim().toLowerCase()).filter(Boolean);
     return `categories=${[...new Set(categories)].sort().join(',')}`;
@@ -305,6 +314,7 @@ export async function runAgentExportWorkflow(options = {}) {
     patient: options.patient,
     patientLabelExact: options.patientLabelExact,
     patientKey: options.patientKey,
+    sourceHost: options.sourceHost,
     category: options.category,
     categories: options.categories || [],
     query: options.query,
@@ -482,6 +492,7 @@ function createExportFilters(options = {}, dateRange = {}) {
     query: options.query || '',
     patientKey: options.patientKey || '',
     patientLabel: options.patientLabelExact || options.patient || '',
+    sourceHost: options.sourceHost || '',
     category: options.category || '',
     startDate: dateRange.startDate || '',
     endDate: dateRange.endDate || '',
@@ -567,6 +578,8 @@ function summarizeSyncStatus(syncStatus) {
     navigatedRouteCounts: syncStatus.navigatedRouteCounts || {},
     stageTimingsMs: syncStatus.stageTimingsMs || {},
     recordDeltas: syncStatus.recordDeltas || {},
+    deletionReasons: syncStatus.deletionReasons || {},
+    skippedTargets: syncStatus.skippedTargets || {},
     checkpointWrites: syncStatus.checkpointWrites || 0,
     startedAt: syncStatus.startedAt || '',
     finishedAt: syncStatus.finishedAt || '',
@@ -617,6 +630,7 @@ function sanitizeSummaryFilters(filters = {}) {
     startDate: filters.startDate || '',
     endDate: filters.endDate || '',
     hasPatientFilter: Boolean(filters.patientKey || filters.patientLabel),
+    hasSourceHostFilter: Boolean(filters.sourceHost),
     hasQuery: Boolean(filters.query),
   };
 }

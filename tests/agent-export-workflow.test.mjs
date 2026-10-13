@@ -10,6 +10,7 @@ import {
   runAgentExportWorkflow,
   validateAgentExportOptions,
 } from '../src/core/agent-export-workflow.js';
+import { filterRecordCards } from '../src/core/record-exports.js';
 
 test('createPullStateScopeKey scopes by patient, sync categories, export category, and query', () => {
   assert.equal(
@@ -19,8 +20,22 @@ test('createPullStateScopeKey scopes by patient, sync categories, export categor
       category: 'test-results',
       query: 'scan',
     }),
-    'patientKey=|patientLabel=Demo Child|categories=test-results,visits|category=test-results|query=scan',
+    'patientKey=|patientLabel=Demo Child|sourceHost=|categories=test-results,visits|category=test-results|query=scan',
   );
+});
+
+test('source-host filtering separates same-label records from different portals', () => {
+  const cards = [
+    { id: 'sch', patient: { label: 'Felix' }, sourceUrl: 'https://mychart.seattlechildrens.org/mychart/result' },
+    { id: 'providence', patient: { label: 'Felix' }, sourceUrl: 'https://mychartwa.providence.org/mychart/result' },
+  ];
+  const result = filterRecordCards({
+    cards,
+    records: cards.map((card) => ({ id: card.id, sourceUrl: card.sourceUrl })),
+    patientLabelExact: 'Felix',
+    sourceHost: 'mychart.seattlechildrens.org',
+  });
+  assert.deepEqual(result.cards.map((card) => card.id), ['sch']);
 });
 
 test('createPullStateScopeKey derives a normalized required patient without overriding explicit filters', () => {
@@ -30,11 +45,11 @@ test('createPullStateScopeKey derives a normalized required patient without over
   };
   assert.equal(
     createPullStateScopeKey(base),
-    'patientKey=|patientLabel=Demo Child|categories=visits|category=|query=',
+    'patientKey=|patientLabel=Demo Child|sourceHost=|categories=visits|category=|query=',
   );
   assert.equal(
     createPullStateScopeKey({ ...base, patient: ' Other ' }),
-    'patientKey=|patientLabel=Other|categories=visits|category=|query=',
+    'patientKey=|patientLabel=Other|sourceHost=|categories=visits|category=|query=',
   );
   assert.equal(
     createPullStateScopeKey({
@@ -43,7 +58,7 @@ test('createPullStateScopeKey derives a normalized required patient without over
       patientLabelExact: '\n',
       patientKey: '\t',
     }),
-    'patientKey=|patientLabel=Demo Child|categories=visits|category=|query=',
+    'patientKey=|patientLabel=Demo Child|sourceHost=|categories=visits|category=|query=',
   );
 });
 
@@ -77,6 +92,29 @@ test('resolveSinceLastPullRange prefers saved state and keeps the start date inc
   assert.equal(range.endDate, '2026-06-10');
   assert.equal(range.fallbackSource, 'pull-state');
   assert.equal(range.stateKey, stateKey);
+});
+
+test('resolveSinceLastPullRange accepts pre-source-host pull-state keys', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'mychart-legacy-pull-state-'));
+  const statePath = path.join(dir, '.last-pull-state.json');
+  await writeFile(statePath, `${JSON.stringify({
+    scopes: {
+      'patientKey=|patientLabel=Demo Child|categories=visits|category=|query=': {
+        lastClinicalDate: '2026-06-08',
+      },
+    },
+  })}\n`, 'utf8');
+  const range = await resolveSinceLastPullRange({
+    cards: [{ id: 'new', date: '2026-06-10' }],
+    options: {
+      pullStatePath: statePath,
+      patientLabelExact: 'Demo Child',
+      categories: ['visits'],
+    },
+    outputDir: dir,
+  });
+  assert.equal(range.startDate, '2026-06-08');
+  assert.equal(range.fallbackSource, 'pull-state');
 });
 
 test('resolveSinceLastPullRange falls back to export filenames, then recent days', async () => {
